@@ -66,6 +66,7 @@ What is the sum of all of the calibration values?
 */
 
 use anyhow::bail;
+use nom::{branch::alt, bytes::complete::tag, combinator::value, IResult};
 
 pub fn part1(input: &str) -> anyhow::Result<u32> {
     let mut total = 0;
@@ -79,7 +80,54 @@ pub fn part1(input: &str) -> anyhow::Result<u32> {
 }
 
 pub fn part2(input: &str) -> anyhow::Result<u32> {
-    todo!("parse words")
+    let mut total: u32 = 0;
+    for line in input.lines().map(|l| l.trim()) {
+        let digits = parse_part2_line(line);
+        println!("{} --> {:?}", line, digits);
+        let Some(first) = digits.first().copied() else { bail!("no digits in line {}", line); };
+        let last = digits.last().copied().unwrap_or(first);
+        total += 10 * (first as u32) + (last as u32);
+    }
+    Ok(total)
+}
+
+// This is not a normal parser. The inputs can overlap. (e.g., "twone" should
+// yield 2 from the "two" and 1 from the "one"). Rather than using normal nom
+// combinators, we'll just manually iterate over every starting point.  Strictly
+// speaking we don't actually need to parse the whole line. It would be faster
+// to find the first digit, then skip to the end and work backwards to find the
+// last digit.
+fn parse_part2_line(input: &str) -> Vec<u8> {
+    (0..input.len())
+        .filter_map(|i| {
+            let (_, d) = digit_parser(&input[i..]).ok()?;
+            Some(d)
+        })
+        .collect()
+}
+
+fn digit_parser(input: &str) -> IResult<&str, u8> {
+    alt((
+        value(0, tag("0")),
+        value(1, tag("1")),
+        value(2, tag("2")),
+        value(3, tag("3")),
+        value(4, tag("4")),
+        value(5, tag("5")),
+        value(6, tag("6")),
+        value(7, tag("7")),
+        value(8, tag("8")),
+        value(9, tag("9")),
+        value(1, tag("one")),
+        value(2, tag("two")),
+        value(3, tag("three")),
+        value(4, tag("four")),
+        value(5, tag("five")),
+        value(6, tag("six")),
+        value(7, tag("seven")),
+        value(8, tag("eight")),
+        value(9, tag("nine")),
+    ))(input)
 }
 
 #[cfg(test)]
@@ -93,7 +141,8 @@ mod test {
             pqr3stu8vwx
             a1b2c3d4e5f
             treb7uchet
-        ".trim();
+        "
+        .trim();
         assert_eq!(part1(input).unwrap(), 142);
     }
 
@@ -102,7 +151,6 @@ mod test {
         let input = std::fs::read_to_string("data/day01.input").unwrap();
         assert_eq!(part1(&input).unwrap(), 54331);
     }
-
 
     #[test]
     fn part2_sample_input() {
@@ -114,7 +162,19 @@ mod test {
             4nineeightseven2
             zoneight234
             7pqrstsixteen
-        ".trim();
-        assert_eq!(part2(input).unwrap(), 142);
+        "
+        .trim();
+        assert_eq!(part2(input.trim()).unwrap(), 281);
+    }
+
+    #[test]
+    fn part2_parser() {
+        assert_eq!(parse_part2_line("twone"), vec![2, 1]);
+    }
+
+    #[test]
+    fn part2_real_input() {
+        let input = std::fs::read_to_string("data/day01.input").unwrap();
+        assert_eq!(part2(&input).unwrap(), 54518);
     }
 }
