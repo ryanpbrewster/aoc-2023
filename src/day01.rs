@@ -83,7 +83,6 @@ pub fn part2(input: &str) -> anyhow::Result<u32> {
     let mut total: u32 = 0;
     for line in input.lines().map(|l| l.trim()) {
         let digits = parse_part2_line(line);
-        println!("{} --> {:?}", line, digits);
         let Some(first) = digits.first().copied() else { bail!("no digits in line {}", line); };
         let last = digits.last().copied().unwrap_or(first);
         total += 10 * (first as u32) + (last as u32);
