@@ -72,7 +72,9 @@ pub fn part1(input: &str) -> anyhow::Result<u32> {
     let mut total = 0;
     for line in input.lines() {
         let mut digits = line.chars().filter_map(|c| c.to_digit(10));
-        let Some(first) = digits.next() else { bail!("no digits in line {}", line); };
+        let Some(first) = digits.next() else {
+            bail!("no digits in line {}", line);
+        };
         let last = digits.last().unwrap_or(first);
         total += 10 * first + last;
     }
@@ -83,7 +85,9 @@ pub fn part2(input: &str) -> anyhow::Result<u32> {
     let mut total: u32 = 0;
     for line in input.lines().map(|l| l.trim()) {
         let digits = parse_part2_line(line);
-        let Some(first) = digits.first().copied() else { bail!("no digits in line {}", line); };
+        let Some(first) = digits.first().copied() else {
+            bail!("no digits in line {}", line);
+        };
         let last = digits.last().copied().unwrap_or(first);
         total += 10 * (first as u32) + (last as u32);
     }
