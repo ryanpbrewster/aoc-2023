@@ -106,8 +106,6 @@ are won. Including the original set of scratchcards, how many total scratchcards
 do you end up with?
 */
 
-use std::cmp;
-
 use anyhow::anyhow;
 use nom::{
     bytes::complete::tag,
@@ -147,18 +145,19 @@ pub fn part2(input: &str) -> anyhow::Result<usize> {
         .lines()
         .map(|l| {
             let card = parse_card(l.trim())?;
-            Ok(card
+            let num_matches = card
                 .numbers
                 .into_iter()
                 .filter(|n| card.winners.contains(n))
-                .count())
+                .count();
+            Ok(num_matches)
         })
         .collect::<anyhow::Result<_>>()?;
-
     let mut copies = vec![1usize; matches.len()];
-    for (i, count) in matches.iter().copied().enumerate() {
-        for j in i + 1..cmp::min(matches.len(), i + count + 1) {
-            copies[j] += copies[i];
+    for (i, num_matches) in matches.into_iter().enumerate() {
+        let cur = copies[i];
+        for c in &mut copies[i + 1..][..num_matches] {
+            *c += cur;
         }
     }
 
