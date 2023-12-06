@@ -140,6 +140,38 @@ What is the lowest location number that corresponds to any of the initial seed
 numbers?
  */
 
+/*
+
+ Everyone will starve if you only plant such a small number of seeds. Re-reading
+ the almanac, it looks like the seeds: line actually describes ranges of seed
+ numbers.
+
+ The values on the initial seeds: line come in pairs. Within each pair, the
+ first value is the start of the range and the second value is the length of the
+ range. So, in the first line of the example above:
+
+seeds: 79 14 55 13
+
+This line describes two ranges of seed numbers to be planted in the garden. The
+first range starts with seed number 79 and contains 14 values: 79, 80, ..., 91,
+92. The second range starts with seed number 55 and contains 13 values: 55, 56,
+..., 66, 67.
+
+Now, rather than considering four seed numbers, you need to consider a total of
+27 seed numbers.
+
+In the above example, the lowest location number can be obtained from seed
+number 82, which corresponds to soil 84, fertilizer 84, water 84, light 77,
+temperature 45, humidity 46, and location 46. So, the lowest location number is
+46.
+
+Consider all of the initial seed numbers listed in the ranges on the first line
+of the almanac. What is the lowest location number that corresponds to any of
+the initial seed numbers?
+  */
+
+use std::{cmp, ops::Range};
+
 use anyhow::anyhow;
 use nom::{
     bytes::complete::tag,
@@ -163,6 +195,21 @@ pub fn part1(input: &str) -> anyhow::Result<i64> {
         .ok_or(anyhow!("empty locations"))
 }
 
+pub fn part2(input: &str) -> anyhow::Result<i64> {
+    let almanac = parse_almanac(input).unwrap();
+    let mut locations = Vec::new();
+    for chunk in almanac.seeds.chunks(2) {
+        let r = chunk[0]..chunk[0] + chunk[1];
+        let locs = almanac.translate_range(r.clone());
+        locations.extend(locs);
+    }
+    locations
+        .into_iter()
+        .map(|r| r.start)
+        .min()
+        .ok_or(anyhow!("empty locations"))
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct Almanac {
     seeds: Vec<i64>,
@@ -175,6 +222,18 @@ impl Almanac {
             input = m.translate(input);
         }
         input
+    }
+
+    fn translate_range(&self, input: Range<i64>) -> Vec<Range<i64>> {
+        let mut ranges = vec![input];
+        for m in &self.maps {
+            let mut next = Vec::new();
+            for r in ranges {
+                next.extend(m.translate_range(r));
+            }
+            ranges = next;
+        }
+        ranges
     }
 }
 
@@ -192,6 +251,50 @@ impl Map {
             }
         }
         input
+    }
+
+    fn translate_range(&self, mut input: Range<i64>) -> Vec<Range<i64>> {
+        // Example:
+        // input = 0 .. 10
+        // translations = [
+        //   1..4 -> 11..14
+        //   6..9 -> 16..19
+        // ]
+        // should result in
+        // [0..1] + [11..14] + [5..6] + [16..19] + [9..10]
+
+        let mut acc = Vec::new();
+        let mut ts = self.translations.iter().cloned().peekable();
+        while !input.is_empty() {
+            match ts.peek().cloned() {
+                None => {
+                    // No translations left, wrap up and return.
+                    acc.push(input);
+                    break;
+                }
+                Some(t) if input.start < t.src => {
+                    // We have some dangling bits before this translation,
+                    // handle those.
+                    let end = cmp::min(input.end, t.src);
+                    acc.push(input.start..end);
+                    input = end..input.end;
+                }
+                Some(t) if input.start >= t.src + t.len => {
+                    // This translation is irrelevant to us, skip it.
+                    ts.next();
+                }
+                Some(t) => {
+                    // Relevant translation: figure out which section can be
+                    // translated, and consume it.
+                    ts.next();
+                    let lo = cmp::max(input.start, t.src);
+                    let hi = cmp::min(input.end, t.src + t.len);
+                    acc.push(t.dst + lo - t.src..t.dst + hi - t.src);
+                    input = hi..input.end;
+                }
+            }
+        }
+        acc
     }
 }
 
@@ -223,7 +326,8 @@ fn seeds_parser(input: &str) -> IResult<&str, Vec<i64>> {
 fn map_parser(input: &str) -> IResult<&str, Map> {
     let (input, name) = not_line_ending(input)?;
     let (input, _) = multispace1(input)?;
-    let (input, translations) = separated_list1(multispace1, translation_parser)(input)?;
+    let (input, mut translations) = separated_list1(multispace1, translation_parser)(input)?;
+    translations.sort_by_key(|t| t.src);
     Ok((
         input,
         Map {
@@ -297,6 +401,41 @@ mod test {
         assert_eq!(
             part1(&std::fs::read_to_string("data/day05.input").unwrap().trim()).unwrap(),
             322500873,
+        );
+    }
+
+    #[test]
+    fn part2_smoke_test() {
+        let m = Map {
+            name: "foo".to_owned(),
+            translations: vec![
+                Translation {
+                    src: 1,
+                    dst: 11,
+                    len: 3,
+                },
+                Translation {
+                    src: 6,
+                    dst: 16,
+                    len: 3,
+                },
+            ],
+        };
+        assert_eq!(
+            m.translate_range(0..10),
+            vec![0..1, 11..14, 4..6, 16..19, 9..10],
+        );
+    }
+
+    #[test]
+    fn part2_sample_input() {
+        assert_eq!(part2(SAMPLE_INPUT.trim()).unwrap(), 46);
+    }
+    #[test]
+    fn part2_real_input() {
+        assert_eq!(
+            part2(&std::fs::read_to_string("data/day05.input").unwrap().trim()).unwrap(),
+            108956227,
         );
     }
 }
