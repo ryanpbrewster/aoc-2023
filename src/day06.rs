@@ -96,6 +96,28 @@ Determine the number of ways you could beat the record in each race. What do you
 get if you multiply these numbers together?
 */
 
+/*
+As the race is about to start, you realize the piece of paper with race times
+and record distances you got earlier actually just has very bad kerning. There's
+really only one race - ignore the spaces between the numbers on each line.
+
+So, the example from before:
+
+Time:      7  15   30
+Distance:  9  40  200
+...now instead means this:
+
+Time:      71530
+Distance:  940200
+
+Now, you have to figure out how many ways there are to win this single race. In
+this example, the race lasts for 71530 milliseconds and the record distance you
+need to beat is 940200 millimeters. You could hold the button anywhere from 14
+to 71516 milliseconds and beat the record, a total of 71503 ways!
+
+How many ways can you beat the record in this one much longer race?
+ */
+
 use anyhow::anyhow;
 use nom::{
     bytes::complete::tag,
@@ -106,12 +128,30 @@ use nom::{
     IResult,
 };
 
-pub fn part1(input: &str) -> anyhow::Result<i32> {
+pub fn part1(input: &str) -> anyhow::Result<i64> {
     let races = parse_races(input)?;
     Ok(races.into_iter().map(ways_to_win).product())
 }
 
-fn ways_to_win(race: Race) -> i32 {
+pub fn part2(input: &str) -> anyhow::Result<i64> {
+    let races = parse_races(input)?;
+    // take all the races and concatenate them into one big race
+    let acc = Race {
+        time: races
+            .iter()
+            .map(|r| r.time.to_string())
+            .collect::<String>()
+            .parse()?,
+        distance: races
+            .iter()
+            .map(|r| r.distance.to_string())
+            .collect::<String>()
+            .parse()?,
+    };
+    Ok(ways_to_win(acc))
+}
+
+fn ways_to_win(race: Race) -> i64 {
     // traveled(hold; duration) = hold * (duration - hold)
     // We care about the min and max values of hold such that
     //   traveled(hold; race.time) > race.distance
@@ -125,13 +165,13 @@ fn ways_to_win(race: Race) -> i32 {
     }
     let min = (-b - f64::sqrt(b * b - 4.0 * a * c)) / (2.0 * a);
     let max = (-b + f64::sqrt(b * b - 4.0 * a * c)) / (2.0 * a);
-    (max.ceil() as i32 - 1) - (min.floor() as i32 + 1) + 1
+    (max.ceil() as i64 - 1) - (min.floor() as i64 + 1) + 1
 }
 
 #[derive(PartialEq, Eq, Debug)]
 struct Race {
-    time: i32,
-    distance: i32,
+    time: i64,
+    distance: i64,
 }
 
 fn parse_races(input: &str) -> anyhow::Result<Vec<Race>> {
@@ -151,7 +191,7 @@ fn races_parser(input: &str) -> IResult<&str, Vec<Race>> {
     Ok((input, races))
 }
 
-fn numbers_parser(input: &str) -> IResult<&str, Vec<i32>> {
+fn numbers_parser(input: &str) -> IResult<&str, Vec<i64>> {
     delimited(
         multispace0,
         separated_list1(multispace1, map_res(digit1, str::parse)),
@@ -199,6 +239,19 @@ mod test {
         assert_eq!(
             part1(&std::fs::read_to_string("data/day06.input").unwrap()).unwrap(),
             131376,
+        );
+    }
+
+    #[test]
+    fn part2_sample_input() {
+        assert_eq!(part2(SAMPLE_INPUT).unwrap(), 71503);
+    }
+
+    #[test]
+    fn part2_real_input() {
+        assert_eq!(
+            part2(&std::fs::read_to_string("data/day06.input").unwrap()).unwrap(),
+            34123437,
         );
     }
 }
