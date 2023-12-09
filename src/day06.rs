@@ -156,15 +156,16 @@ fn ways_to_win(race: Race) -> i64 {
     // We care about the min and max values of hold such that
     //   traveled(hold; race.time) > race.distance
     // x * (t - x) > d
-    // x * t - x * x - d = 0
+    // x * t - x * x - d == 0
     // x * x - x * t + d == 0
     // (t +- sqrt(t*t - 4*d)) / 2
     let (a, b, c) = (1.0, -race.time as f64, race.distance as f64);
-    if b * b < 4.0 * a * c {
+    let sqrt = f64::sqrt(b * b - 4.0 * a * c);
+    if sqrt.is_nan() {
         return 0;
     }
-    let min = (-b - f64::sqrt(b * b - 4.0 * a * c)) / (2.0 * a);
-    let max = (-b + f64::sqrt(b * b - 4.0 * a * c)) / (2.0 * a);
+    let min = (-b - sqrt) / (2.0 * a);
+    let max = (-b + sqrt) / (2.0 * a);
     (max.ceil() as i64 - 1) - (min.floor() as i64 + 1) + 1
 }
 
