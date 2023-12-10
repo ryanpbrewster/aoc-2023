@@ -100,7 +100,7 @@ before you're only on nodes that end with Z?
 
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use nom::{
     branch::alt,
     bytes::complete::tag,
@@ -133,31 +133,76 @@ pub fn part1(input: &str) -> anyhow::Result<usize> {
 pub fn part2(input: &str) -> anyhow::Result<usize> {
     let input = parse_input(input)?;
 
-    let mut cur: Vec<String> = input
+    // Regardless of where you start, you'll eventually end up in a cycle.  By
+    // manually playing with the input I have determined that, each starting
+    // position goes through exactly one __Z node during its cycle, and none
+    // of the starting positions hit a __Z node before entering a cycle.
+    // That makes this problem enormously simpler.
+
+    // This implementation is intentionally very brittle. If you feed it an input
+    // that doesn't have those two characteristics, it will explode rather than spit
+    // out an incorrect answer.
+
+    let cycle_lengths = input
         .graph
         .keys()
         .filter(|k| k.ends_with('A'))
-        .cloned()
-        .collect();
-    for (i, &dir) in input.directions.iter().cycle().enumerate() {
-        println!("{i}: {cur:?}");
-        if cur.iter().all(|k| k.ends_with('Z')) {
-            return Ok(i);
+        .map(|start| compute_cycle(start.clone(), &input.directions, &input.graph))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    cycle_lengths
+        .iter()
+        .copied()
+        .reduce(lcm)
+        .ok_or(anyhow!("graph has no __A nodes"))
+}
+
+fn compute_cycle(
+    start: String,
+    directions: &[Direction],
+    graph: &BTreeMap<String, (String, String)>,
+) -> anyhow::Result<usize> {
+    let mut cur = start;
+
+    // In order to tell whether we're actually in a cycle, we need to have been at the same node,
+    // and in the same position in our directions loop.
+    let mut vis: BTreeMap<(String, usize), usize> = BTreeMap::new();
+    let mut iter = directions.iter().cycle().enumerate();
+    loop {
+        let (i, &dir) = iter.next().unwrap();
+        if let Some(&prev) = vis.get(&(cur.clone(), i % directions.len())) {
+            // We hit a cycle!
+            let cycle_length = i - prev;
+            let winners: Vec<usize> = vis
+                .into_iter()
+                .filter_map(|((k, _pos), i)| if k.ends_with('Z') { Some(i) } else { None })
+                .collect();
+            let effective_cycle_length = winners
+                .iter()
+                .copied()
+                .reduce(gcd)
+                .context("the cycle must contain __Z nodes")?;
+            if effective_cycle_length * winners.len() != cycle_length {
+                bail!("we ony handle cases where the exit condition can be expressed as `t = 0 (mod m)`, and a cycle of {cycle_length} w/ __Z nodes at {winners:?} cannot");
+            }
+            return Ok(effective_cycle_length);
         }
-        match dir {
-            Direction::Left => {
-                for c in cur.iter_mut() {
-                    *c = input.graph.get(c).unwrap().0.clone();
-                }
-            }
-            Direction::Right => {
-                for c in cur.iter_mut() {
-                    *c = input.graph.get(c).unwrap().1.clone();
-                }
-            }
+        vis.insert((cur.clone(), i % directions.len()), i);
+        cur = match dir {
+            Direction::Left => graph.get(&cur).unwrap().0.clone(),
+            Direction::Right => graph.get(&cur).unwrap().1.clone(),
         };
     }
-    unreachable!()
+}
+
+fn gcd(m: usize, n: usize) -> usize {
+    if n == 0 {
+        m
+    } else {
+        gcd(n, m % n)
+    }
+}
+fn lcm(m: usize, n: usize) -> usize {
+    m / gcd(m, n) * n
 }
 
 struct Input {
@@ -165,7 +210,7 @@ struct Input {
     graph: BTreeMap<String, (String, String)>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
 enum Direction {
     Left,
     Right,
@@ -262,7 +307,7 @@ mod test {
     fn part2_real_input() {
         assert_eq!(
             part2(&std::fs::read_to_string("data/day08.input").unwrap()).unwrap(),
-            12737,
+            9064949303801,
         );
     }
 }
