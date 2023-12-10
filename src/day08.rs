@@ -98,7 +98,7 @@ Simultaneously start on every node that ends with A. How many steps does it take
 before you're only on nodes that end with Z?
 */
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use anyhow::{anyhow, bail, Context};
 use nom::{
@@ -147,7 +147,7 @@ pub fn part2(input: &str) -> anyhow::Result<usize> {
         .graph
         .keys()
         .filter(|k| k.ends_with('A'))
-        .map(|start| compute_cycle(start.clone(), &input.directions, &input.graph))
+        .map(|start| compute_cycle(start, &input.directions, &input.graph))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     // By virtue of how `compute_cycle` works, we now have a list of effective cycle lengths, l_i, where we are looking for
@@ -177,24 +177,26 @@ pub fn part2(input: &str) -> anyhow::Result<usize> {
 }
 
 fn compute_cycle(
-    start: String,
+    start: &str,
     directions: &[Direction],
-    graph: &BTreeMap<String, (String, String)>,
+    graph: &HashMap<String, (String, String)>,
 ) -> anyhow::Result<usize> {
     let mut cur = start;
 
     // In order to tell whether we're actually in a cycle, we need to have been at the same node,
     // and in the same position in our directions loop.
-    let mut vis: BTreeMap<(String, usize), usize> = BTreeMap::new();
+    let mut vis: HashMap<&str, HashMap<usize, usize>> = HashMap::new();
     let mut iter = directions.iter().cycle().enumerate();
     loop {
         let (i, &dir) = iter.next().unwrap();
-        if let Some(&prev) = vis.get(&(cur.clone(), i % directions.len())) {
+        let pos = i % directions.len();
+        if let Some(&prev) = vis.get(cur).and_then(|v| v.get(&pos)) {
             // We hit a cycle!
             let cycle_length = i - prev;
             let winners: Vec<usize> = vis
                 .into_iter()
-                .filter_map(|((k, _pos), i)| if k.ends_with('Z') { Some(i) } else { None })
+                .filter(|(k, _v)| k.ends_with('Z'))
+                .flat_map(|(_k, v)| v.into_values())
                 .collect();
             let effective_cycle_length = winners
                 .iter()
@@ -206,10 +208,10 @@ fn compute_cycle(
             }
             return Ok(effective_cycle_length);
         }
-        vis.insert((cur.clone(), i % directions.len()), i);
+        vis.entry(cur).or_default().insert(pos, i);
         cur = match dir {
-            Direction::Left => graph.get(&cur).unwrap().0.clone(),
-            Direction::Right => graph.get(&cur).unwrap().1.clone(),
+            Direction::Left => graph.get(cur).unwrap().0.as_str(),
+            Direction::Right => graph.get(cur).unwrap().1.as_str(),
         };
     }
 }
@@ -227,7 +229,7 @@ fn lcm(m: usize, n: usize) -> usize {
 
 struct Input {
     directions: Vec<Direction>,
-    graph: BTreeMap<String, (String, String)>,
+    graph: HashMap<String, (String, String)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
@@ -254,7 +256,7 @@ fn directions_parser(input: &str) -> IResult<&str, Vec<Direction>> {
     )))(input)
 }
 
-fn graph_parser(input: &str) -> IResult<&str, BTreeMap<String, (String, String)>> {
+fn graph_parser(input: &str) -> IResult<&str, HashMap<String, (String, String)>> {
     let (input, edges) = separated_list1(multispace1, edge_parser)(input)?;
     Ok((input, edges.into_iter().collect()))
 }
