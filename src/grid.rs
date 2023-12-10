@@ -1,5 +1,6 @@
 use anyhow::bail;
 
+#[derive(Clone)]
 pub struct Grid<T> {
     height: i32,
     width: i32,
@@ -33,16 +34,43 @@ impl<T> Grid<T> {
         &self.rows
     }
 
+    pub fn contains(&self, i: i32, j: i32) -> bool {
+        0 <= i && i < self.height && 0 <= j && j < self.width
+    }
     pub fn get(&self, i: i32, j: i32) -> Option<&T> {
-        if i < 0 || i >= self.height || j < 0 || j >= self.width {
-            return None;
+        if self.contains(i, j) {
+            Some(&self.rows[i as usize][j as usize])
+        } else {
+            None
         }
-        Some(&self.rows[i as usize][j as usize])
+    }
+    pub fn get_mut(&mut self, i: i32, j: i32) -> Option<&mut T> {
+        if self.contains(i, j) {
+            Some(&mut self.rows[i as usize][j as usize])
+        } else {
+            None
+        }
     }
     pub fn row(&self, i: i32) -> Option<&[T]> {
         if i < 0 || i >= self.height {
             return None;
         }
         Some(&self.rows[i as usize])
+    }
+}
+
+use std::fmt::{Debug, Write};
+impl<T> Debug for Grid<T>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for row in &self.rows {
+            for cell in row {
+                cell.fmt(f)?;
+            }
+            f.write_char('\n')?;
+        }
+        Ok(())
     }
 }
