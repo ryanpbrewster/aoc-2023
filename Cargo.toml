@@ -16,3 +16,7 @@ criterion = "0.5.1"
 [[bench]]
 name = "day02_benchmark"
 harness = false
+
+[[bench]]
+name = "day08_benchmark"
+harness = false

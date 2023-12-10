@@ -149,6 +149,26 @@ pub fn part2(input: &str) -> anyhow::Result<usize> {
         .filter(|k| k.ends_with('A'))
         .map(|start| compute_cycle(start.clone(), &input.directions, &input.graph))
         .collect::<anyhow::Result<Vec<_>>>()?;
+
+    // By virtue of how `compute_cycle` works, we now have a list of effective cycle lengths, l_i, where we are looking for
+    // some time `t > 0` such that
+    //   t === 0 (mod l_0) AND t === 0 (mod l_1) AND ...
+    // which can be solved by just finding any common multiple of {l_0, ..., l_k}.
+    // Here we'll use LCM to find the smallest.
+
+    // I think that if we had a slightly less pleasant input, we would get congruences like
+    //   t === i_0 (mod l_0) AND t === i_1 (mod l_1) AND ...
+    // which would effectively represent cycles with some "lead in" time.
+
+    // An even less pleasant input would result in congruences like
+    //   [ t === i_0 (mod l_0) OR t === j_0 (mod l_0) OR t === k_0 (mod l_0) ]
+    //         AND
+    //   [ t === i_1 (mod l_1) OR t === j_1 (mod l_1) ]
+    //         AND
+    //         ...
+    // which would effectively represent cycles that pass through multiple non-uniformly-distributed
+    // __Z nodes (e.g., AAA -> 11Z -> 22Z -> AAA, where you're at a __Z node for t = 1 (mod 3) or t = 2 (mod 3), but at t = 0 (mod 3) you're on AAA)
+
     cycle_lengths
         .iter()
         .copied()
