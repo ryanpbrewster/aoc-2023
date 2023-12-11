@@ -57,6 +57,11 @@ impl<T> Grid<T> {
         }
         Some(&self.rows[i as usize])
     }
+
+    pub fn enumerate(&self) -> impl Iterator<Item = ((i32, i32), &T)> {
+        itertools::iproduct!(0..self.height, 0..self.width)
+            .map(|(i, j)| ((i, j), &self.rows[i as usize][j as usize]))
+    }
 }
 
 use std::fmt::{Debug, Write};
