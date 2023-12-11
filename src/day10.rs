@@ -338,7 +338,7 @@ fn extract_loop(
     loop {
         path.push((i, j));
         let (ii, jj) = dir.step((i, j));
-        if path.contains(&(ii, jj)) {
+        if path[0] == (ii, jj) {
             return Ok(path);
         }
         let Some(&Tile::Connector(pipe)) = grid.get(ii, jj) else {
