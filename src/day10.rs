@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt::Write};
+use std::{collections::HashMap, fmt::Write};
 
 use crate::grid::Grid;
 use anyhow::{anyhow, bail};
@@ -232,10 +232,10 @@ pub fn part1(input: &str) -> anyhow::Result<usize> {
         bail!("no animal found in grid");
     };
     for dir in [
-        Direction::North,
-        Direction::South,
-        Direction::East,
-        Direction::West,
+        Direction::Up,
+        Direction::Down,
+        Direction::Left,
+        Direction::Right,
     ] {
         if let Ok(path) = extract_loop(&grid, (i, j), dir) {
             return Ok(path.len() / 2);
@@ -245,98 +245,87 @@ pub fn part1(input: &str) -> anyhow::Result<usize> {
 }
 
 pub fn part2(input: &str) -> anyhow::Result<usize> {
-    let grid = parse_input(input)?;
+    let mut grid = parse_input(input)?;
     let Some((i, j)) = itertools::iproduct!(0..grid.height(), 0..grid.width())
         .find(|&(i, j)| grid.get(i, j) == Some(&Tile::Animal))
     else {
         bail!("no animal found in grid");
     };
-    let Some(path) = [
-        Direction::North,
-        Direction::South,
-        Direction::East,
-        Direction::West,
-    ]
-    .into_iter()
-    .find_map(|dir| extract_loop(&grid, (i, j), dir).ok()) else {
+    let Some(path) = [Direction::Up, Direction::Down, Direction::Right]
+        .into_iter()
+        .find_map(|dir| extract_loop(&grid, (i, j), dir).ok())
+    else {
         bail!("no closed loop")
     };
 
-    let pathset: HashSet<(i32, i32)> = path.iter().copied().collect();
-    let mut vis = HashSet::new();
-    let mut stack = vec![((0, 0), Direction::North)];
-    while let Some(((i, j), bias)) = stack.pop() {
-        if vis.contains(&(i, j)) {
-            continue;
-        }
-        let Some(mut tile) = grid.get(i, j).copied() else {
-            continue;
-        };
-        vis.insert((i, j));
-        if !pathset.contains(&(i, j)) {
-            tile = Tile::Ground;
-        };
-        match (tile, bias) {
-            (Tile::Ground, _) => {
-                stack.push(((i + 1, j), Direction::North));
-                stack.push(((i - 1, j), Direction::South));
-                stack.push(((i, j + 1), Direction::West));
-                stack.push(((i, j - 1), Direction::East));
-            }
-            (Tile::Animal, _) => {}
-            (Tile::Connector(Pipe::NS), dir) => {
-                stack.push(((i + 1, j), dir));
-                stack.push(((i - 1, j), dir));
-                stack.push((dir.step((i, j)), dir.rev()));
-            }
-            (Tile::Connector(Pipe::EW), dir) => {
-                stack.push(((i, j + 1), dir));
-                stack.push(((i, j - 1), dir));
-                stack.push((dir.step((i, j)), dir.rev()));
-            }
-            (Tile::Connector(Pipe::NE), Direction::North | Direction::East) => {
-                stack.push(((i, j + 1), Direction::North));
-                stack.push(((i - 1, j), Direction::East));
-            }
-            (Tile::Connector(Pipe::NE), Direction::South | Direction::West) => {
-                stack.push(((i, j + 1), Direction::South));
-                stack.push(((i - 1, j), Direction::West));
-                stack.push(((i, j - 1), Direction::East));
-                stack.push(((i + 1, j), Direction::North));
-            }
-            (Tile::Connector(Pipe::ES), Direction::South | Direction::East) => {
-                stack.push(((i, j + 1), Direction::South));
-                stack.push(((i + 1, j), Direction::East));
-            }
-            (Tile::Connector(Pipe::ES), Direction::North | Direction::West) => {
-                stack.push(((i, j + 1), Direction::North));
-                stack.push(((i - 1, j), Direction::South));
-                stack.push(((i, j - 1), Direction::East));
-                stack.push(((i + 1, j), Direction::West));
-            }
-            (Tile::Connector(Pipe::SW), Direction::North | Direction::East) => {
-                stack.push(((i, j + 1), Direction::West));
-                stack.push(((i - 1, j), Direction::South));
-                stack.push(((i, j - 1), Direction::North));
-                stack.push(((i + 1, j), Direction::East));
-            }
-            (Tile::Connector(Pipe::SW), Direction::South | Direction::West) => {
-                stack.push(((i, j - 1), Direction::South));
-                stack.push(((i + 1, j), Direction::West));
-            }
-            (Tile::Connector(Pipe::NW), Direction::North | Direction::West) => {
-                stack.push(((i - 1, j), Direction::West));
-                stack.push(((i, j - 1), Direction::North));
-            }
-            (Tile::Connector(Pipe::NW), Direction::South | Direction::East) => {
-                stack.push(((i, j + 1), Direction::West));
-                stack.push(((i - 1, j), Direction::East));
-                stack.push(((i, j - 1), Direction::South));
-                stack.push(((i + 1, j), Direction::North));
+    let (up, down, left, right) = {
+        let (i0, j0) = path[1];
+        let (i1, j1) = path.last().copied().unwrap();
+        (
+            i0 == i - 1 || i1 == i - 1,
+            i0 == i + 1 || i1 == i + 1,
+            j0 == j - 1 || j1 == j - 1,
+            j0 == j + 1 || j1 == j + 1,
+        )
+    };
+    *grid.get_mut(i, j).unwrap() = Tile::Connector(match (up, down, left, right) {
+        (true, true, false, false) => Pipe::UD,
+        (true, false, true, false) => Pipe::UL,
+        (true, false, false, true) => Pipe::UR,
+        (false, true, true, false) => Pipe::DL,
+        (false, false, true, true) => Pipe::LR,
+        (false, true, false, true) => Pipe::DR,
+        _ => panic!("invalid path: (up={up},down={down},left={left},right={right})"),
+    });
+    let path: HashMap<(i32, i32), Pipe> = path
+        .into_iter()
+        .map(|(i, j)| {
+            let &Tile::Connector(pipe) = grid.get(i, j).unwrap() else {
+                panic!("invalid path")
+            };
+            ((i, j), pipe)
+        })
+        .collect();
+
+    let mut area = 0;
+    for i in 0..grid.height() {
+        // Are are inside the loop?
+        let mut inside = false;
+        // If we are riding an edge, was the latest pipe "upwards" facing?
+        // This is relevant because when we hop off the edge we need to tell if
+        // we ever actually crossed it.
+        let mut upward = false;
+        for j in 0..grid.width() {
+            match path.get(&(i, j)) {
+                None => {
+                    if inside {
+                        area += 1;
+                    }
+                }
+                Some(Pipe::UD) => {
+                    inside = !inside;
+                }
+                Some(Pipe::UR) => {
+                    upward = true;
+                }
+                Some(Pipe::DR) => {
+                    upward = false;
+                }
+                Some(Pipe::LR) => {}
+                Some(Pipe::UL) => {
+                    if !upward {
+                        inside = !inside;
+                    }
+                }
+                Some(Pipe::DL) => {
+                    if upward {
+                        inside = !inside;
+                    }
+                }
             }
         }
     }
-    Ok(grid.height() as usize * grid.width() as usize - vis.len())
+    Ok(area)
 }
 
 fn extract_loop(
@@ -356,18 +345,18 @@ fn extract_loop(
             bail!("bottomed out at ({ii}, {jj}) going {dir:?}");
         };
         dir = match (dir, pipe) {
-            (Direction::South, Pipe::NE) => Direction::East,
-            (Direction::South, Pipe::NS) => Direction::South,
-            (Direction::South, Pipe::NW) => Direction::West,
-            (Direction::East, Pipe::NW) => Direction::North,
-            (Direction::East, Pipe::EW) => Direction::East,
-            (Direction::East, Pipe::SW) => Direction::South,
-            (Direction::North, Pipe::ES) => Direction::East,
-            (Direction::North, Pipe::NS) => Direction::North,
-            (Direction::North, Pipe::SW) => Direction::West,
-            (Direction::West, Pipe::NE) => Direction::North,
-            (Direction::West, Pipe::ES) => Direction::South,
-            (Direction::West, Pipe::EW) => Direction::West,
+            (Direction::Down, Pipe::UR) => Direction::Left,
+            (Direction::Down, Pipe::UD) => Direction::Down,
+            (Direction::Down, Pipe::UL) => Direction::Right,
+            (Direction::Left, Pipe::UL) => Direction::Up,
+            (Direction::Left, Pipe::LR) => Direction::Left,
+            (Direction::Left, Pipe::DL) => Direction::Down,
+            (Direction::Up, Pipe::DR) => Direction::Left,
+            (Direction::Up, Pipe::UD) => Direction::Up,
+            (Direction::Up, Pipe::DL) => Direction::Right,
+            (Direction::Right, Pipe::UR) => Direction::Up,
+            (Direction::Right, Pipe::DR) => Direction::Down,
+            (Direction::Right, Pipe::LR) => Direction::Right,
             _ => bail!("bad pipe {dir:?} --> {pipe:?}"),
         };
         (i, j) = (ii, jj);
@@ -401,12 +390,12 @@ impl TryFrom<u8> for Tile {
 
     fn try_from(value: u8) -> anyhow::Result<Self> {
         match value {
-            b'|' => Ok(Self::Connector(Pipe::NS)),
-            b'-' => Ok(Self::Connector(Pipe::EW)),
-            b'L' => Ok(Self::Connector(Pipe::NE)),
-            b'J' => Ok(Self::Connector(Pipe::NW)),
-            b'7' => Ok(Self::Connector(Pipe::SW)),
-            b'F' => Ok(Self::Connector(Pipe::ES)),
+            b'|' => Ok(Self::Connector(Pipe::UD)),
+            b'-' => Ok(Self::Connector(Pipe::LR)),
+            b'L' => Ok(Self::Connector(Pipe::UR)),
+            b'J' => Ok(Self::Connector(Pipe::UL)),
+            b'7' => Ok(Self::Connector(Pipe::DL)),
+            b'F' => Ok(Self::Connector(Pipe::DR)),
             b'.' => Ok(Self::Ground),
             b'S' => Ok(Self::Animal),
             _ => Err(anyhow!("unrecognized tile: {value}")),
@@ -417,12 +406,12 @@ impl TryFrom<u8> for Tile {
 impl std::fmt::Debug for Tile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ch = match self {
-            Self::Connector(Pipe::NS) => '|',
-            Self::Connector(Pipe::EW) => '-',
-            Self::Connector(Pipe::NE) => 'L',
-            Self::Connector(Pipe::NW) => 'J',
-            Self::Connector(Pipe::SW) => '7',
-            Self::Connector(Pipe::ES) => 'F',
+            Self::Connector(Pipe::UD) => '|',
+            Self::Connector(Pipe::LR) => '-',
+            Self::Connector(Pipe::UR) => 'L',
+            Self::Connector(Pipe::UL) => 'J',
+            Self::Connector(Pipe::DL) => '7',
+            Self::Connector(Pipe::DR) => 'F',
             Tile::Ground => '.',
             Tile::Animal => 'S',
         };
@@ -432,38 +421,30 @@ impl std::fmt::Debug for Tile {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Direction {
-    North,
-    South,
-    East,
-    West,
+    Up,
+    Down,
+    Left,
+    Right,
 }
 impl Direction {
-    fn rev(&self) -> Direction {
-        match self {
-            Direction::North => Direction::South,
-            Direction::South => Direction::North,
-            Direction::East => Direction::West,
-            Direction::West => Direction::East,
-        }
-    }
     fn step(&self, (i, j): (i32, i32)) -> (i32, i32) {
         match self {
-            Direction::North => (i - 1, j),
-            Direction::South => (i + 1, j),
-            Direction::East => (i, j + 1),
-            Direction::West => (i, j - 1),
+            Direction::Up => (i - 1, j),
+            Direction::Down => (i + 1, j),
+            Direction::Left => (i, j + 1),
+            Direction::Right => (i, j - 1),
         }
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Pipe {
-    NE,
-    NS,
-    NW,
-    ES,
-    EW,
-    SW,
+    UR,
+    UD,
+    UL,
+    DR,
+    LR,
+    DL,
 }
 
 #[cfg(test)]
