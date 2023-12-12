@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::anyhow;
 use nom::{
     bytes::complete::{is_a, tag},
@@ -159,32 +161,56 @@ pub fn part2(input: &str) -> anyhow::Result<usize> {
 }
 
 fn count_arrangements(r: &Record) -> usize {
-    let mut total = 0;
-    count_helper(&mut total, &r.data, &r.counts);
-    total
+    let rr = RecordRef {
+        data: &r.data,
+        counts: &r.counts,
+    };
+    Memoizer::default().count_arrangements(rr)
 }
-fn count_helper(total: &mut usize, data: &[u8], counts: &[usize]) {
-    if data.is_empty() {
-        if counts.is_empty() {
-            *total += 1;
+#[derive(Default)]
+struct Memoizer<'a> {
+    cache: HashMap<RecordRef<'a>, usize>,
+}
+#[derive(PartialEq, Eq, Debug, Hash, Clone, Copy)]
+struct RecordRef<'a> {
+    data: &'a [u8],
+    counts: &'a [usize],
+}
+
+impl<'a> Memoizer<'a> {
+    fn count_arrangements(&mut self, r: RecordRef<'a>) -> usize {
+        if let Some(&v) = self.cache.get(&r) {
+            return v;
         }
-        return;
+        let v = self.count_helper(r);
+        self.cache.insert(r, v);
+        v
     }
-    if counts.is_empty() {
-        if !data.contains(&b'#') {
-            *total += 1;
+    fn count_helper(&mut self, r: RecordRef<'a>) -> usize {
+        if r.data.is_empty() {
+            return if r.counts.is_empty() { 1 } else { 0 };
         }
-        return;
-    }
-    if data[0] != b'#' {
-        // This is either ground, or unknown. Try skipping it.
-        count_helper(total, &data[1..], counts);
-    }
-    if data[0] != b'.' {
-        // This is either damaged, or unknown. Try consuming it.
-        if let Some(next) = remove_prefix(data, counts[0]) {
-            count_helper(total, next, &counts[1..]);
+        if r.counts.is_empty() {
+            return if !r.data.contains(&b'#') { 1 } else { 0 };
         }
+        let mut total = 0;
+        if r.data[0] != b'#' {
+            // This is either ground, or unknown. Try skipping it.
+            total += self.count_arrangements(RecordRef {
+                data: &r.data[1..],
+                counts: r.counts,
+            });
+        }
+        if r.data[0] != b'.' {
+            // This is either damaged, or unknown. Try consuming it.
+            if let Some(next) = remove_prefix(r.data, r.counts[0]) {
+                total += self.count_arrangements(RecordRef {
+                    data: next,
+                    counts: &r.counts[1..],
+                });
+            }
+        }
+        total
     }
 }
 
@@ -270,7 +296,7 @@ mod test {
     fn part2_real_input() {
         assert_eq!(
             part2(&std::fs::read_to_string("data/day12.input").unwrap()).unwrap(),
-            6852
+            8475948826693,
         );
     }
 }
