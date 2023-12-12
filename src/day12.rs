@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use anyhow::anyhow;
 use nom::{
     bytes::complete::{is_a, tag},
@@ -161,70 +159,46 @@ pub fn part2(input: &str) -> anyhow::Result<usize> {
 }
 
 fn count_arrangements(r: &Record) -> usize {
-    let rr = RecordRef {
-        data: &r.data,
-        counts: &r.counts,
-    };
-    Memoizer::default().count_arrangements(rr)
-}
-#[derive(Default)]
-struct Memoizer<'a> {
-    cache: HashMap<RecordRef<'a>, usize>,
-}
-#[derive(PartialEq, Eq, Debug, Hash, Clone, Copy)]
-struct RecordRef<'a> {
-    data: &'a [u8],
-    counts: &'a [usize],
-}
+    // How many arrangements are there which end with a damaged segment (and are therefore not eligible for another damaged segment)?
+    let mut damaged = vec![0; r.data.len() + 1];
+    // How many arragements are there which do NOT end with a damaged segment at `i`?
+    let mut undamaged = vec![0; r.data.len() + 1];
+    // How many consecutive damaged items are there leading up to `i`?
+    let mut consecutive: Vec<usize> = vec![0; r.data.len() + 1];
 
-impl<'a> Memoizer<'a> {
-    fn count_arrangements(&mut self, r: RecordRef<'a>) -> usize {
-        if let Some(&v) = self.cache.get(&r) {
-            return v;
+    // Let's populate the base case, with zero damaged segments
+    // There is exactly 1 way to arrange the empty input
+    undamaged[0] = 1;
+    // That one arrangement is valid up until we hit a damaged cell.
+    for (d, &ch) in (1..=r.data.len()).zip(r.data.iter()) {
+        if ch != b'#' {
+            undamaged[d] = undamaged[d - 1];
         }
-        let v = self.count_helper(r);
-        self.cache.insert(r, v);
-        v
+        if ch != b'.' {
+            consecutive[d] = 1 + consecutive[d - 1];
+        }
     }
-    fn count_helper(&mut self, r: RecordRef<'a>) -> usize {
-        if r.data.is_empty() {
-            return if r.counts.is_empty() { 1 } else { 0 };
-        }
-        if r.counts.is_empty() {
-            return if !r.data.contains(&b'#') { 1 } else { 0 };
-        }
-        let mut total = 0;
-        if r.data[0] != b'#' {
-            // This is either ground, or unknown. Try skipping it.
-            total += self.count_arrangements(RecordRef {
-                data: &r.data[1..],
-                counts: r.counts,
-            });
-        }
-        if r.data[0] != b'.' {
-            // This is either damaged, or unknown. Try consuming it.
-            if let Some(next) = remove_prefix(r.data, r.counts[0]) {
-                total += self.count_arrangements(RecordRef {
-                    data: next,
-                    counts: &r.counts[1..],
-                });
-            }
-        }
-        total
-    }
-}
 
-fn remove_prefix(data: &[u8], count: usize) -> Option<&[u8]> {
-    if data.len() < count || data[..count].contains(&b'.') {
-        return None;
+    let mut prev_undamaged = vec![0; r.data.len() + 1];
+    for &count in &r.counts {
+        std::mem::swap(&mut undamaged, &mut prev_undamaged);
+        undamaged[0] = 0;
+        for d in 1..=r.data.len() {
+            // This cell could be undamaged, in which case we can extend any existing arrangement by one.
+            undamaged[d] = if r.data[d - 1] != b'#' {
+                undamaged[d - 1] + damaged[d - 1]
+            } else {
+                0
+            };
+            // This could be the end of a damaged segment, in which case we can only use _undamaged_ arragements
+            damaged[d] = if consecutive[d] >= count {
+                prev_undamaged[d - count]
+            } else {
+                0
+            };
+        }
     }
-    if data.len() == count {
-        return Some(&data[count..]);
-    }
-    if data[count] == b'#' {
-        return None;
-    }
-    Some(&data[count + 1..])
+    undamaged[r.data.len()] + damaged[r.data.len()]
 }
 
 struct Record {
