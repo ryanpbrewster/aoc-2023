@@ -1,0 +1,491 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="454" onload="init(evt)" viewBox="0 0 1200 454" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:monospace; font-size:12px }
+#title { text-anchor:middle; font-size:17px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = false;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames, known_font_width;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    known_font_width = get_monospace_width(frames);
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+            svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            update_text_for_elements(frames.children);
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function get_monospace_width(frames) {
+    // Given the id="frames" element, return the width of text characters if
+    // this is a monospace font, otherwise return 0.
+    text = find_child(frames.children[0], "text");
+    originalContent = text.textContent;
+    text.textContent = "!";
+    bangWidth = text.getComputedTextLength();
+    text.textContent = "W";
+    wWidth = text.getComputedTextLength();
+    text.textContent = originalContent;
+    if (bangWidth === wWidth) {
+        return bangWidth;
+    } else {
+        return 0;
+    }
+}
+function update_text_for_elements(elements) {
+    // In order to render quickly in the browser, you want to do one pass of
+    // reading attributes, and one pass of mutating attributes. See
+    // https://web.dev/avoid-large-complex-layouts-and-layout-thrashing/ for details.
+
+    // Fall back to inefficient calculation, if we're variable-width font.
+    // TODO This should be optimized somehow too.
+    if (known_font_width === 0) {
+        for (var i = 0; i < elements.length; i++) {
+            update_text(elements[i]);
+        }
+        return;
+    }
+
+    var textElemNewAttributes = [];
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var r = find_child(e, "rect");
+        var t = find_child(e, "text");
+        var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+        var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+        var newX = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+        // Smaller than this size won't fit anything
+        if (w < 2 * known_font_width) {
+            textElemNewAttributes.push([newX, ""]);
+            continue;
+        }
+
+        // Fit in full text width
+        if (txt.length * known_font_width < w) {
+            textElemNewAttributes.push([newX, txt]);
+            continue;
+        }
+
+        var substringLength = Math.floor(w / known_font_width) - 2;
+        if (truncate_text_right) {
+            // Truncate the right side of the text.
+            textElemNewAttributes.push([newX, txt.substring(0, substringLength) + ".."]);
+            continue;
+        } else {
+            // Truncate the left side of the text.
+            textElemNewAttributes.push([newX, ".." + txt.substring(txt.length - substringLength, txt.length)]);
+            continue;
+        }
+    }
+
+    console.assert(textElemNewAttributes.length === elements.length, "Resize failed, please file a bug at https://github.com/jonhoo/inferno/");
+
+    // Now that we know new textContent, set it all in one go so we don't refresh a bazillion times.
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var values = textElemNewAttributes[i];
+        var t = find_child(e, "text");
+        t.attributes.x.value = values[0];
+        t.textContent = values[1];
+    }
+}
+
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    var to_update_text = [];
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                to_update_text.push(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                to_update_text.push(e);
+            }
+        }
+    }
+    update_text_for_elements(to_update_text);
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+    }
+    update_text_for_elements(el);
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="454" fill="url(#background)"/><text id="title" fill="rgb(0,0,0)" x="50.0000%" y="24.00">Flame Graph</text><text id="details" fill="rgb(0,0,0)" x="10" y="437.00"> </text><text id="unzoom" class="hide" fill="rgb(0,0,0)" x="10" y="24.00">Reset Zoom</text><text id="search" fill="rgb(0,0,0)" x="1190" y="24.00">Search</text><text id="matched" fill="rgb(0,0,0)" x="1190" y="437.00"> </text><svg id="frames" x="10" width="1180" total_samples="5084"><g><title>day12_benchmark-685b351db9bfd74a`&lt;criterion::Criterion as core::default::Default&gt;::default (2 samples, 0.04%)</title><rect x="0.0000%" y="293" width="0.0393%" height="15" fill="rgb(227,0,7)" fg:x="0" fg:w="2"/><text x="0.2500%" y="303.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`once_cell::imp::OnceCell&lt;T&gt;::initialize (2 samples, 0.04%)</title><rect x="0.0000%" y="277" width="0.0393%" height="15" fill="rgb(217,0,24)" fg:x="0" fg:w="2"/><text x="0.2500%" y="287.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`once_cell::imp::initialize_or_wait (2 samples, 0.04%)</title><rect x="0.0000%" y="261" width="0.0393%" height="15" fill="rgb(221,193,54)" fg:x="0" fg:w="2"/><text x="0.2500%" y="271.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`once_cell::imp::OnceCell&lt;T&gt;::initialize::_{{closure}} (2 samples, 0.04%)</title><rect x="0.0000%" y="245" width="0.0393%" height="15" fill="rgb(248,212,6)" fg:x="0" fg:w="2"/><text x="0.2500%" y="255.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`core::ops::function::FnOnce::call_once (2 samples, 0.04%)</title><rect x="0.0000%" y="229" width="0.0393%" height="15" fill="rgb(208,68,35)" fg:x="0" fg:w="2"/><text x="0.2500%" y="239.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`once_cell::imp::OnceCell&lt;T&gt;::initialize (2 samples, 0.04%)</title><rect x="0.0000%" y="213" width="0.0393%" height="15" fill="rgb(232,128,0)" fg:x="0" fg:w="2"/><text x="0.2500%" y="223.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`once_cell::imp::initialize_or_wait (2 samples, 0.04%)</title><rect x="0.0000%" y="197" width="0.0393%" height="15" fill="rgb(207,160,47)" fg:x="0" fg:w="2"/><text x="0.2500%" y="207.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`once_cell::imp::OnceCell&lt;T&gt;::initialize::_{{closure}} (2 samples, 0.04%)</title><rect x="0.0000%" y="181" width="0.0393%" height="15" fill="rgb(228,23,34)" fg:x="0" fg:w="2"/><text x="0.2500%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`criterion_plot::version (2 samples, 0.04%)</title><rect x="0.0000%" y="165" width="0.0393%" height="15" fill="rgb(218,30,26)" fg:x="0" fg:w="2"/><text x="0.2500%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`std::process::Command::output (2 samples, 0.04%)</title><rect x="0.0000%" y="149" width="0.0393%" height="15" fill="rgb(220,122,19)" fg:x="0" fg:w="2"/><text x="0.2500%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`std::sys::unix::process::process_inner::_&lt;impl std::sys::unix::process::process_common::Command&gt;::spawn (2 samples, 0.04%)</title><rect x="0.0000%" y="133" width="0.0393%" height="15" fill="rgb(250,228,42)" fg:x="0" fg:w="2"/><text x="0.2500%" y="143.50"></text></g><g><title>libsystem_c.dylib`posix_spawnp (2 samples, 0.04%)</title><rect x="0.0000%" y="117" width="0.0393%" height="15" fill="rgb(240,193,28)" fg:x="0" fg:w="2"/><text x="0.2500%" y="127.50"></text></g><g><title>libsystem_kernel.dylib`__posix_spawn (2 samples, 0.04%)</title><rect x="0.0000%" y="101" width="0.0393%" height="15" fill="rgb(216,20,37)" fg:x="0" fg:w="2"/><text x="0.2500%" y="111.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$free (1 samples, 0.02%)</title><rect x="0.0393%" y="197" width="0.0197%" height="15" fill="rgb(206,188,39)" fg:x="2" fg:w="1"/><text x="0.2893%" y="207.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$calloc (1 samples, 0.02%)</title><rect x="0.4524%" y="165" width="0.0197%" height="15" fill="rgb(217,207,13)" fg:x="23" fg:w="1"/><text x="0.7024%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$free (2 samples, 0.04%)</title><rect x="0.4721%" y="165" width="0.0393%" height="15" fill="rgb(231,73,38)" fg:x="24" fg:w="2"/><text x="0.7221%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$malloc (2 samples, 0.04%)</title><rect x="0.6294%" y="149" width="0.0393%" height="15" fill="rgb(225,20,46)" fg:x="32" fg:w="2"/><text x="0.8794%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$realloc (1 samples, 0.02%)</title><rect x="0.6688%" y="149" width="0.0197%" height="15" fill="rgb(210,31,41)" fg:x="34" fg:w="1"/><text x="0.9188%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`__rdl_realloc (1 samples, 0.02%)</title><rect x="0.7474%" y="133" width="0.0197%" height="15" fill="rgb(221,200,47)" fg:x="38" fg:w="1"/><text x="0.9974%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_realloc (2 samples, 0.04%)</title><rect x="0.7671%" y="133" width="0.0393%" height="15" fill="rgb(226,26,5)" fg:x="39" fg:w="2"/><text x="1.0171%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`DYLD-STUB$$_platform_memmove (1 samples, 0.02%)</title><rect x="1.2589%" y="101" width="0.0197%" height="15" fill="rgb(249,33,26)" fg:x="64" fg:w="1"/><text x="1.5089%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (5 samples, 0.10%)</title><rect x="1.2785%" y="101" width="0.0983%" height="15" fill="rgb(235,183,28)" fg:x="65" fg:w="5"/><text x="1.5285%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (19 samples, 0.37%)</title><rect x="1.3769%" y="101" width="0.3737%" height="15" fill="rgb(221,5,38)" fg:x="70" fg:w="19"/><text x="1.6269%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_pointer_size (10 samples, 0.20%)</title><rect x="1.7506%" y="101" width="0.1967%" height="15" fill="rgb(247,18,42)" fg:x="89" fg:w="10"/><text x="2.0006%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`DYLD-STUB$$_platform_bzero (2 samples, 0.04%)</title><rect x="2.1046%" y="85" width="0.0393%" height="15" fill="rgb(241,131,45)" fg:x="107" fg:w="2"/><text x="2.3546%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (27 samples, 0.53%)</title><rect x="2.1440%" y="85" width="0.5311%" height="15" fill="rgb(249,31,29)" fg:x="109" fg:w="27"/><text x="2.3940%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`rack_get_thread_index (1 samples, 0.02%)</title><rect x="2.6751%" y="69" width="0.0197%" height="15" fill="rgb(225,111,53)" fg:x="136" fg:w="1"/><text x="2.9251%" y="79.50"></text></g><g><title>libsystem_malloc.dylib`set_tiny_meta_header_in_use (1 samples, 0.02%)</title><rect x="2.7144%" y="53" width="0.0197%" height="15" fill="rgb(238,160,17)" fg:x="138" fg:w="1"/><text x="2.9644%" y="63.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (4 samples, 0.08%)</title><rect x="2.6751%" y="85" width="0.0787%" height="15" fill="rgb(214,148,48)" fg:x="136" fg:w="4"/><text x="2.9251%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (3 samples, 0.06%)</title><rect x="2.6947%" y="69" width="0.0590%" height="15" fill="rgb(232,36,49)" fg:x="137" fg:w="3"/><text x="2.9447%" y="79.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_from_free_list (1 samples, 0.02%)</title><rect x="2.7341%" y="53" width="0.0197%" height="15" fill="rgb(209,103,24)" fg:x="139" fg:w="1"/><text x="2.9841%" y="63.50"></text></g><g><title>libsystem_platform.dylib`__bzero (2 samples, 0.04%)</title><rect x="2.7537%" y="85" width="0.0393%" height="15" fill="rgb(229,88,8)" fg:x="140" fg:w="2"/><text x="3.0037%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_realloc (50 samples, 0.98%)</title><rect x="1.9473%" y="101" width="0.9835%" height="15" fill="rgb(213,181,19)" fg:x="99" fg:w="50"/><text x="2.1973%" y="111.50"></text></g><g><title>libsystem_platform.dylib`_platform_memset (7 samples, 0.14%)</title><rect x="2.7931%" y="85" width="0.1377%" height="15" fill="rgb(254,191,54)" fg:x="142" fg:w="7"/><text x="3.0431%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_realloc (113 samples, 2.22%)</title><rect x="1.0228%" y="117" width="2.2227%" height="15" fill="rgb(241,83,37)" fg:x="52" fg:w="113"/><text x="1.2728%" y="127.50">l..</text></g><g><title>libsystem_platform.dylib`_platform_memmove (16 samples, 0.31%)</title><rect x="2.9308%" y="101" width="0.3147%" height="15" fill="rgb(233,36,39)" fg:x="149" fg:w="16"/><text x="3.1808%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`default_zone_realloc (2 samples, 0.04%)</title><rect x="3.2455%" y="117" width="0.0393%" height="15" fill="rgb(226,3,54)" fg:x="165" fg:w="2"/><text x="3.4955%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`_realloc (131 samples, 2.58%)</title><rect x="0.8065%" y="133" width="2.5767%" height="15" fill="rgb(245,192,40)" fg:x="41" fg:w="131"/><text x="1.0565%" y="143.50">li..</text></g><g><title>libsystem_malloc.dylib`nanov2_realloc (5 samples, 0.10%)</title><rect x="3.2848%" y="117" width="0.0983%" height="15" fill="rgb(238,167,29)" fg:x="167" fg:w="5"/><text x="3.5348%" y="127.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::finish_grow (152 samples, 2.99%)</title><rect x="0.6884%" y="149" width="2.9898%" height="15" fill="rgb(232,182,51)" fg:x="35" fg:w="152"/><text x="0.9384%" y="159.50">day..</text></g><g><title>libsystem_malloc.dylib`nanov2_size (15 samples, 0.30%)</title><rect x="3.3832%" y="133" width="0.2950%" height="15" fill="rgb(231,60,39)" fg:x="172" fg:w="15"/><text x="3.6332%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (2 samples, 0.04%)</title><rect x="3.6782%" y="149" width="0.0393%" height="15" fill="rgb(208,69,12)" fg:x="187" fg:w="2"/><text x="3.9282%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`_realloc (3 samples, 0.06%)</title><rect x="3.7175%" y="149" width="0.0590%" height="15" fill="rgb(235,93,37)" fg:x="189" fg:w="3"/><text x="3.9675%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve::do_reserve_and_handle (174 samples, 3.42%)</title><rect x="0.5114%" y="165" width="3.4225%" height="15" fill="rgb(213,116,39)" fg:x="26" fg:w="174"/><text x="0.7614%" y="175.50">day..</text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (8 samples, 0.16%)</title><rect x="3.7766%" y="149" width="0.1574%" height="15" fill="rgb(222,207,29)" fg:x="192" fg:w="8"/><text x="4.0266%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$realloc (1 samples, 0.02%)</title><rect x="3.9339%" y="149" width="0.0197%" height="15" fill="rgb(206,96,30)" fg:x="200" fg:w="1"/><text x="4.1839%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`__rdl_realloc (1 samples, 0.02%)</title><rect x="3.9536%" y="149" width="0.0197%" height="15" fill="rgb(218,138,4)" fg:x="201" fg:w="1"/><text x="4.2036%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (3 samples, 0.06%)</title><rect x="4.0716%" y="101" width="0.0590%" height="15" fill="rgb(250,191,14)" fg:x="207" fg:w="3"/><text x="4.3216%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_pointer_size (4 samples, 0.08%)</title><rect x="4.1306%" y="101" width="0.0787%" height="15" fill="rgb(239,60,40)" fg:x="210" fg:w="4"/><text x="4.3806%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_realloc (3 samples, 0.06%)</title><rect x="4.2093%" y="101" width="0.0590%" height="15" fill="rgb(206,27,48)" fg:x="214" fg:w="3"/><text x="4.4593%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (1 samples, 0.02%)</title><rect x="4.2486%" y="85" width="0.0197%" height="15" fill="rgb(225,35,8)" fg:x="216" fg:w="1"/><text x="4.4986%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_realloc (16 samples, 0.31%)</title><rect x="4.0519%" y="117" width="0.3147%" height="15" fill="rgb(250,213,24)" fg:x="206" fg:w="16"/><text x="4.3019%" y="127.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove (5 samples, 0.10%)</title><rect x="4.2683%" y="101" width="0.0983%" height="15" fill="rgb(247,123,22)" fg:x="217" fg:w="5"/><text x="4.5183%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`default_zone_realloc (2 samples, 0.04%)</title><rect x="4.3666%" y="117" width="0.0393%" height="15" fill="rgb(231,138,38)" fg:x="222" fg:w="2"/><text x="4.6166%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`_realloc (22 samples, 0.43%)</title><rect x="3.9929%" y="133" width="0.4327%" height="15" fill="rgb(231,145,46)" fg:x="203" fg:w="22"/><text x="4.2429%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_realloc (1 samples, 0.02%)</title><rect x="4.4060%" y="117" width="0.0197%" height="15" fill="rgb(251,118,11)" fg:x="224" fg:w="1"/><text x="4.6560%" y="127.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::finish_grow (25 samples, 0.49%)</title><rect x="3.9732%" y="149" width="0.4917%" height="15" fill="rgb(217,147,25)" fg:x="202" fg:w="25"/><text x="4.2232%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_size (2 samples, 0.04%)</title><rect x="4.4256%" y="133" width="0.0393%" height="15" fill="rgb(247,81,37)" fg:x="225" fg:w="2"/><text x="4.6756%" y="143.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve_for_push (29 samples, 0.57%)</title><rect x="3.9339%" y="165" width="0.5704%" height="15" fill="rgb(209,12,38)" fg:x="200" fg:w="29"/><text x="4.1839%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`_realloc (2 samples, 0.04%)</title><rect x="4.4650%" y="149" width="0.0393%" height="15" fill="rgb(227,1,9)" fg:x="227" fg:w="2"/><text x="4.7150%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::finish_grow (4 samples, 0.08%)</title><rect x="4.5043%" y="165" width="0.0787%" height="15" fill="rgb(248,47,43)" fg:x="229" fg:w="4"/><text x="4.7543%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`__rdl_alloc_zeroed (1 samples, 0.02%)</title><rect x="55.8615%" y="149" width="0.0197%" height="15" fill="rgb(221,10,30)" fg:x="2840" fg:w="1"/><text x="56.1115%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`DYLD-STUB$$_platform_memset (1 samples, 0.02%)</title><rect x="55.8812%" y="149" width="0.0197%" height="15" fill="rgb(210,229,1)" fg:x="2841" fg:w="1"/><text x="56.1312%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`_szone_free (3 samples, 0.06%)</title><rect x="55.9009%" y="149" width="0.0590%" height="15" fill="rgb(222,148,37)" fg:x="2842" fg:w="3"/><text x="56.1509%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`get_tiny_previous_free_msize (3 samples, 0.06%)</title><rect x="56.4910%" y="133" width="0.0590%" height="15" fill="rgb(234,67,33)" fg:x="2872" fg:w="3"/><text x="56.7410%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_add_ptr (1 samples, 0.02%)</title><rect x="57.4744%" y="117" width="0.0197%" height="15" fill="rgb(247,98,35)" fg:x="2922" fg:w="1"/><text x="57.7244%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`free_tiny (84 samples, 1.65%)</title><rect x="55.9599%" y="149" width="1.6522%" height="15" fill="rgb(247,138,52)" fg:x="2845" fg:w="84"/><text x="56.2099%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (54 samples, 1.06%)</title><rect x="56.5500%" y="133" width="1.0622%" height="15" fill="rgb(213,79,30)" fg:x="2875" fg:w="54"/><text x="56.8000%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_remove_ptr (6 samples, 0.12%)</title><rect x="57.4941%" y="117" width="0.1180%" height="15" fill="rgb(246,177,23)" fg:x="2923" fg:w="6"/><text x="57.7441%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_calloc (6 samples, 0.12%)</title><rect x="57.6121%" y="149" width="0.1180%" height="15" fill="rgb(230,62,27)" fg:x="2929" fg:w="6"/><text x="57.8621%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`rack_get_thread_index (6 samples, 0.12%)</title><rect x="57.8088%" y="133" width="0.1180%" height="15" fill="rgb(216,154,8)" fg:x="2939" fg:w="6"/><text x="58.0588%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_from_free_list (4 samples, 0.08%)</title><rect x="57.9268%" y="133" width="0.0787%" height="15" fill="rgb(244,35,45)" fg:x="2945" fg:w="4"/><text x="58.1768%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`set_tiny_meta_header_in_use (11 samples, 0.22%)</title><rect x="58.1825%" y="117" width="0.2164%" height="15" fill="rgb(251,115,12)" fg:x="2958" fg:w="11"/><text x="58.4325%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`_tiny_check_and_zero_inline_meta_from_freelist (2 samples, 0.04%)</title><rect x="58.9496%" y="101" width="0.0393%" height="15" fill="rgb(240,54,50)" fg:x="2997" fg:w="2"/><text x="59.1996%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (65 samples, 1.28%)</title><rect x="57.7301%" y="149" width="1.2785%" height="15" fill="rgb(233,84,52)" fg:x="2935" fg:w="65"/><text x="57.9801%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (51 samples, 1.00%)</title><rect x="58.0055%" y="133" width="1.0031%" height="15" fill="rgb(207,117,47)" fg:x="2949" fg:w="51"/><text x="58.2555%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_from_free_list (31 samples, 0.61%)</title><rect x="58.3989%" y="117" width="0.6098%" height="15" fill="rgb(249,43,39)" fg:x="2969" fg:w="31"/><text x="58.6489%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_add_ptr (1 samples, 0.02%)</title><rect x="58.9890%" y="101" width="0.0197%" height="15" fill="rgb(209,38,44)" fg:x="2999" fg:w="1"/><text x="59.2390%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (2 samples, 0.04%)</title><rect x="59.0087%" y="149" width="0.0393%" height="15" fill="rgb(236,212,23)" fg:x="3000" fg:w="2"/><text x="59.2587%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (3 samples, 0.06%)</title><rect x="59.0480%" y="149" width="0.0590%" height="15" fill="rgb(242,79,21)" fg:x="3002" fg:w="3"/><text x="59.2980%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`aoc_2023::day12::count_arrangements (2,805 samples, 55.17%)</title><rect x="4.5830%" y="165" width="55.1731%" height="15" fill="rgb(211,96,35)" fg:x="233" fg:w="2805"/><text x="4.8330%" y="175.50">day12_benchmark-685b351db9bfd74a`aoc_2023::day12::count_arrangements</text></g><g><title>libsystem_platform.dylib`_platform_memset (33 samples, 0.65%)</title><rect x="59.1070%" y="149" width="0.6491%" height="15" fill="rgb(253,215,40)" fg:x="3005" fg:w="33"/><text x="59.3570%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`DYLD-STUB$$_platform_bzero (2 samples, 0.04%)</title><rect x="59.7561%" y="165" width="0.0393%" height="15" fill="rgb(211,81,21)" fg:x="3038" fg:w="2"/><text x="60.0061%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`DYLD-STUB$$_platform_memset (1 samples, 0.02%)</title><rect x="59.7954%" y="165" width="0.0197%" height="15" fill="rgb(208,190,38)" fg:x="3040" fg:w="1"/><text x="60.0454%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_calloc (7 samples, 0.14%)</title><rect x="59.8151%" y="165" width="0.1377%" height="15" fill="rgb(235,213,38)" fg:x="3041" fg:w="7"/><text x="60.0651%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (13 samples, 0.26%)</title><rect x="59.9528%" y="165" width="0.2557%" height="15" fill="rgb(237,122,38)" fg:x="3048" fg:w="13"/><text x="60.2028%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`_szone_free (9 samples, 0.18%)</title><rect x="60.2085%" y="165" width="0.1770%" height="15" fill="rgb(244,218,35)" fg:x="3061" fg:w="9"/><text x="60.4585%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`free (13 samples, 0.26%)</title><rect x="60.3855%" y="165" width="0.2557%" height="15" fill="rgb(240,68,47)" fg:x="3070" fg:w="13"/><text x="60.6355%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`free_tiny (5 samples, 0.10%)</title><rect x="60.6412%" y="165" width="0.0983%" height="15" fill="rgb(210,16,53)" fg:x="3083" fg:w="5"/><text x="60.8912%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (1 samples, 0.02%)</title><rect x="60.7199%" y="149" width="0.0197%" height="15" fill="rgb(235,124,12)" fg:x="3087" fg:w="1"/><text x="60.9699%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_calloc (1 samples, 0.02%)</title><rect x="60.7396%" y="165" width="0.0197%" height="15" fill="rgb(224,169,11)" fg:x="3088" fg:w="1"/><text x="60.9896%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`szone_calloc (1 samples, 0.02%)</title><rect x="60.7592%" y="165" width="0.0197%" height="15" fill="rgb(250,166,2)" fg:x="3089" fg:w="1"/><text x="61.0092%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (1 samples, 0.02%)</title><rect x="60.7789%" y="165" width="0.0197%" height="15" fill="rgb(242,216,29)" fg:x="3090" fg:w="1"/><text x="61.0289%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;core::iter::adapters::map::Map&lt;I,F&gt; as core::iter::traits::iterator::Iterator&gt;::fold (3,094 samples, 60.86%)</title><rect x="0.0787%" y="181" width="60.8576%" height="15" fill="rgb(230,116,27)" fg:x="4" fg:w="3094"/><text x="0.3287%" y="191.50">day12_benchmark-685b351db9bfd74a`&lt;core::iter::adapters::map::Map&lt;I,F&gt; as core::iter::traits::iterator..</text></g><g><title>libsystem_platform.dylib`_platform_memset (7 samples, 0.14%)</title><rect x="60.7986%" y="165" width="0.1377%" height="15" fill="rgb(228,99,48)" fg:x="3091" fg:w="7"/><text x="61.0486%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$free (1 samples, 0.02%)</title><rect x="60.9363%" y="181" width="0.0197%" height="15" fill="rgb(253,11,6)" fg:x="3098" fg:w="1"/><text x="61.1863%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$memcpy (1 samples, 0.02%)</title><rect x="60.9559%" y="181" width="0.0197%" height="15" fill="rgb(247,143,39)" fg:x="3099" fg:w="1"/><text x="61.2059%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve::do_reserve_and_handle (3 samples, 0.06%)</title><rect x="60.9756%" y="181" width="0.0590%" height="15" fill="rgb(236,97,10)" fg:x="3100" fg:w="3"/><text x="61.2256%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve_for_push (2 samples, 0.04%)</title><rect x="61.0346%" y="181" width="0.0393%" height="15" fill="rgb(233,208,19)" fg:x="3103" fg:w="2"/><text x="61.2846%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`aoc_2023::day12::count_arrangements (2 samples, 0.04%)</title><rect x="61.0740%" y="181" width="0.0393%" height="15" fill="rgb(216,164,2)" fg:x="3105" fg:w="2"/><text x="61.3240%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;&amp;str as nom::traits::InputTakeAtPosition&gt;::split_at_position1_complete (1 samples, 0.02%)</title><rect x="61.1526%" y="133" width="0.0197%" height="15" fill="rgb(220,129,5)" fg:x="3109" fg:w="1"/><text x="61.4026%" y="143.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;&amp;str as nom::traits::FindToken&lt;char&gt;&gt;::find_token (69 samples, 1.36%)</title><rect x="61.6837%" y="117" width="1.3572%" height="15" fill="rgb(242,17,10)" fg:x="3136" fg:w="69"/><text x="61.9337%" y="127.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;&amp;str as nom::traits::InputTakeAtPosition&gt;::split_at_position1_complete (14 samples, 0.28%)</title><rect x="63.0409%" y="117" width="0.2754%" height="15" fill="rgb(242,107,0)" fg:x="3205" fg:w="14"/><text x="63.2909%" y="127.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$realloc (1 samples, 0.02%)</title><rect x="63.3556%" y="101" width="0.0197%" height="15" fill="rgb(251,28,31)" fg:x="3221" fg:w="1"/><text x="63.6056%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (3 samples, 0.06%)</title><rect x="63.4146%" y="53" width="0.0590%" height="15" fill="rgb(233,223,10)" fg:x="3224" fg:w="3"/><text x="63.6646%" y="63.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_realloc (2 samples, 0.04%)</title><rect x="63.4736%" y="53" width="0.0393%" height="15" fill="rgb(215,21,27)" fg:x="3227" fg:w="2"/><text x="63.7236%" y="63.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (2 samples, 0.04%)</title><rect x="63.4736%" y="37" width="0.0393%" height="15" fill="rgb(232,23,21)" fg:x="3227" fg:w="2"/><text x="63.7236%" y="47.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::finish_grow (8 samples, 0.16%)</title><rect x="63.3753%" y="101" width="0.1574%" height="15" fill="rgb(244,5,23)" fg:x="3222" fg:w="8"/><text x="63.6253%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`_realloc (7 samples, 0.14%)</title><rect x="63.3950%" y="85" width="0.1377%" height="15" fill="rgb(226,81,46)" fg:x="3223" fg:w="7"/><text x="63.6450%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_realloc (6 samples, 0.12%)</title><rect x="63.4146%" y="69" width="0.1180%" height="15" fill="rgb(247,70,30)" fg:x="3224" fg:w="6"/><text x="63.6646%" y="79.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove (1 samples, 0.02%)</title><rect x="63.5130%" y="53" width="0.0197%" height="15" fill="rgb(212,68,19)" fg:x="3229" fg:w="1"/><text x="63.7630%" y="63.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (3 samples, 0.06%)</title><rect x="63.5327%" y="101" width="0.0590%" height="15" fill="rgb(240,187,13)" fg:x="3230" fg:w="3"/><text x="63.7827%" y="111.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve_for_push (16 samples, 0.31%)</title><rect x="63.3163%" y="117" width="0.3147%" height="15" fill="rgb(223,113,26)" fg:x="3219" fg:w="16"/><text x="63.5663%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (2 samples, 0.04%)</title><rect x="63.5917%" y="101" width="0.0393%" height="15" fill="rgb(206,192,2)" fg:x="3233" fg:w="2"/><text x="63.8417%" y="111.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;F as nom::internal::Parser&lt;I,O,E&gt;&gt;::parse (126 samples, 2.48%)</title><rect x="61.1723%" y="133" width="2.4784%" height="15" fill="rgb(241,108,4)" fg:x="3110" fg:w="126"/><text x="61.4223%" y="143.50">da..</text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::finish_grow (1 samples, 0.02%)</title><rect x="63.6310%" y="117" width="0.0197%" height="15" fill="rgb(247,173,49)" fg:x="3235" fg:w="1"/><text x="63.8810%" y="127.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;core::str::iter::Lines as core::iter::traits::iterator::Iterator&gt;::next (9 samples, 0.18%)</title><rect x="63.6507%" y="133" width="0.1770%" height="15" fill="rgb(224,114,35)" fg:x="3236" fg:w="9"/><text x="63.9007%" y="143.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`__rdl_alloc (1 samples, 0.02%)</title><rect x="63.8277%" y="133" width="0.0197%" height="15" fill="rgb(245,159,27)" fg:x="3245" fg:w="1"/><text x="64.0777%" y="143.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`core::num::_&lt;impl core::str::traits::FromStr for u64&gt;::from_str (6 samples, 0.12%)</title><rect x="63.8474%" y="133" width="0.1180%" height="15" fill="rgb(245,172,44)" fg:x="3246" fg:w="6"/><text x="64.0974%" y="143.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`core::slice::memchr::memchr_aligned (31 samples, 0.61%)</title><rect x="63.9654%" y="133" width="0.6098%" height="15" fill="rgb(236,23,11)" fg:x="3252" fg:w="31"/><text x="64.2154%" y="143.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`nom::character::complete::space1 (2 samples, 0.04%)</title><rect x="64.5751%" y="133" width="0.0393%" height="15" fill="rgb(205,117,38)" fg:x="3283" fg:w="2"/><text x="64.8251%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (2 samples, 0.04%)</title><rect x="64.6145%" y="133" width="0.0393%" height="15" fill="rgb(237,72,25)" fg:x="3285" fg:w="2"/><text x="64.8645%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (3 samples, 0.06%)</title><rect x="64.6538%" y="133" width="0.0590%" height="15" fill="rgb(244,70,9)" fg:x="3287" fg:w="3"/><text x="64.9038%" y="143.50"></text></g><g><title>libsystem_platform.dylib`_platform_memcmp (1 samples, 0.02%)</title><rect x="64.7128%" y="133" width="0.0197%" height="15" fill="rgb(217,125,39)" fg:x="3290" fg:w="1"/><text x="64.9628%" y="143.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;core::iter::adapters::map::Map&lt;I,F&gt; as core::iter::traits::iterator::Iterator&gt;::try_fold (188 samples, 3.70%)</title><rect x="61.1330%" y="149" width="3.6979%" height="15" fill="rgb(235,36,10)" fg:x="3108" fg:w="188"/><text x="61.3830%" y="159.50">day1..</text></g><g><title>libsystem_platform.dylib`_platform_memmove (5 samples, 0.10%)</title><rect x="64.7325%" y="133" width="0.0983%" height="15" fill="rgb(251,123,47)" fg:x="3291" fg:w="5"/><text x="64.9825%" y="143.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;core::str::iter::Lines as core::iter::traits::iterator::Iterator&gt;::next (1 samples, 0.02%)</title><rect x="64.8308%" y="149" width="0.0197%" height="15" fill="rgb(221,13,13)" fg:x="3296" fg:w="1"/><text x="65.0808%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`small_try_realloc_in_place (1 samples, 0.02%)</title><rect x="64.8505%" y="69" width="0.0197%" height="15" fill="rgb(238,131,9)" fg:x="3297" fg:w="1"/><text x="65.1005%" y="79.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve::do_reserve_and_handle (2 samples, 0.04%)</title><rect x="64.8505%" y="149" width="0.0393%" height="15" fill="rgb(211,50,8)" fg:x="3297" fg:w="2"/><text x="65.1005%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::finish_grow (2 samples, 0.04%)</title><rect x="64.8505%" y="133" width="0.0393%" height="15" fill="rgb(245,182,24)" fg:x="3297" fg:w="2"/><text x="65.1005%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`_realloc (2 samples, 0.04%)</title><rect x="64.8505%" y="117" width="0.0393%" height="15" fill="rgb(242,14,37)" fg:x="3297" fg:w="2"/><text x="65.1005%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_realloc (2 samples, 0.04%)</title><rect x="64.8505%" y="101" width="0.0393%" height="15" fill="rgb(246,228,12)" fg:x="3297" fg:w="2"/><text x="65.1005%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`szone_realloc (2 samples, 0.04%)</title><rect x="64.8505%" y="85" width="0.0393%" height="15" fill="rgb(213,55,15)" fg:x="3297" fg:w="2"/><text x="65.1005%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (1 samples, 0.02%)</title><rect x="64.8702%" y="69" width="0.0197%" height="15" fill="rgb(209,9,3)" fg:x="3298" fg:w="1"/><text x="65.1202%" y="79.50"></text></g><g><title>libsystem_malloc.dylib`small_malloc_should_clear (1 samples, 0.02%)</title><rect x="64.8702%" y="53" width="0.0197%" height="15" fill="rgb(230,59,30)" fg:x="3298" fg:w="1"/><text x="65.1202%" y="63.50"></text></g><g><title>libsystem_malloc.dylib`small_malloc_from_free_list (1 samples, 0.02%)</title><rect x="64.8702%" y="37" width="0.0197%" height="15" fill="rgb(209,121,21)" fg:x="3298" fg:w="1"/><text x="65.1202%" y="47.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`core::iter::adapters::try_process (199 samples, 3.91%)</title><rect x="61.1133%" y="181" width="3.9142%" height="15" fill="rgb(220,109,13)" fg:x="3107" fg:w="199"/><text x="61.3633%" y="191.50">day1..</text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_iter (199 samples, 3.91%)</title><rect x="61.1133%" y="165" width="3.9142%" height="15" fill="rgb(232,18,1)" fg:x="3107" fg:w="199"/><text x="61.3633%" y="175.50">day1..</text></g><g><title>day12_benchmark-685b351db9bfd74a`core::str::_&lt;impl str&gt;::trim_matches (7 samples, 0.14%)</title><rect x="64.8899%" y="149" width="0.1377%" height="15" fill="rgb(215,41,42)" fg:x="3299" fg:w="7"/><text x="65.1399%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (13 samples, 0.26%)</title><rect x="65.0275%" y="181" width="0.2557%" height="15" fill="rgb(224,123,36)" fg:x="3306" fg:w="13"/><text x="65.2775%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`_szone_free (1 samples, 0.02%)</title><rect x="65.2832%" y="181" width="0.0197%" height="15" fill="rgb(240,125,3)" fg:x="3319" fg:w="1"/><text x="65.5332%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`free (5 samples, 0.10%)</title><rect x="65.3029%" y="181" width="0.0983%" height="15" fill="rgb(205,98,50)" fg:x="3320" fg:w="5"/><text x="65.5529%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_madvise_block (4 samples, 0.08%)</title><rect x="65.4013%" y="181" width="0.0787%" height="15" fill="rgb(205,185,37)" fg:x="3325" fg:w="4"/><text x="65.6513%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_madvise_block_locked (4 samples, 0.08%)</title><rect x="65.4013%" y="165" width="0.0787%" height="15" fill="rgb(238,207,15)" fg:x="3325" fg:w="4"/><text x="65.6513%" y="175.50"></text></g><g><title>libsystem_kernel.dylib`madvise (4 samples, 0.08%)</title><rect x="65.4013%" y="149" width="0.0787%" height="15" fill="rgb(213,199,42)" fg:x="3325" fg:w="4"/><text x="65.6513%" y="159.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove (52 samples, 1.02%)</title><rect x="65.4799%" y="181" width="1.0228%" height="15" fill="rgb(235,201,11)" fg:x="3329" fg:w="52"/><text x="65.7299%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`aoc_2023::day12::part2 (3,380 samples, 66.48%)</title><rect x="0.0590%" y="197" width="66.4831%" height="15" fill="rgb(207,46,11)" fg:x="3" fg:w="3380"/><text x="0.3090%" y="207.50">day12_benchmark-685b351db9bfd74a`aoc_2023::day12::part2</text></g><g><title>libsystem_platform.dylib`_platform_memset (2 samples, 0.04%)</title><rect x="66.5028%" y="181" width="0.0393%" height="15" fill="rgb(241,35,35)" fg:x="3381" fg:w="2"/><text x="66.7528%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (3 samples, 0.06%)</title><rect x="66.5421%" y="197" width="0.0590%" height="15" fill="rgb(243,32,47)" fg:x="3383" fg:w="3"/><text x="66.7921%" y="207.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_iter (3,391 samples, 66.70%)</title><rect x="0.0393%" y="245" width="66.6994%" height="15" fill="rgb(247,202,23)" fg:x="2" fg:w="3391"/><text x="0.2893%" y="255.50">day12_benchmark-685b351db9bfd74a`&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_it..</text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;core::iter::adapters::map::Map&lt;I,F&gt; as core::iter::traits::iterator::Iterator&gt;::fold (3,391 samples, 66.70%)</title><rect x="0.0393%" y="229" width="66.6994%" height="15" fill="rgb(219,102,11)" fg:x="2" fg:w="3391"/><text x="0.2893%" y="239.50">day12_benchmark-685b351db9bfd74a`&lt;core::iter::adapters::map::Map&lt;I,F&gt; as core::iter::traits::iterator::Iterator..</text></g><g><title>day12_benchmark-685b351db9bfd74a`criterion::bencher::Bencher&lt;M&gt;::iter (3,391 samples, 66.70%)</title><rect x="0.0393%" y="213" width="66.6994%" height="15" fill="rgb(243,110,44)" fg:x="2" fg:w="3391"/><text x="0.2893%" y="223.50">day12_benchmark-685b351db9bfd74a`criterion::bencher::Bencher&lt;M&gt;::iter</text></g><g><title>libsystem_malloc.dylib`free (7 samples, 0.14%)</title><rect x="66.6011%" y="197" width="0.1377%" height="15" fill="rgb(222,74,54)" fg:x="3386" fg:w="7"/><text x="66.8511%" y="207.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;criterion::report::CliReport as criterion::report::Report&gt;::profile (1 samples, 0.02%)</title><rect x="66.7388%" y="245" width="0.0197%" height="15" fill="rgb(216,99,12)" fg:x="3393" fg:w="1"/><text x="66.9888%" y="255.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`criterion::format::time (1 samples, 0.02%)</title><rect x="66.7388%" y="229" width="0.0197%" height="15" fill="rgb(226,22,26)" fg:x="3393" fg:w="1"/><text x="66.9888%" y="239.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$calloc (1 samples, 0.02%)</title><rect x="66.8765%" y="181" width="0.0197%" height="15" fill="rgb(217,163,10)" fg:x="3400" fg:w="1"/><text x="67.1265%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$free (1 samples, 0.02%)</title><rect x="66.8961%" y="181" width="0.0197%" height="15" fill="rgb(213,25,53)" fg:x="3401" fg:w="1"/><text x="67.1461%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`__rdl_alloc_zeroed (1 samples, 0.02%)</title><rect x="66.9158%" y="181" width="0.0197%" height="15" fill="rgb(252,105,26)" fg:x="3402" fg:w="1"/><text x="67.1658%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$malloc (2 samples, 0.04%)</title><rect x="66.9748%" y="165" width="0.0393%" height="15" fill="rgb(220,39,43)" fg:x="3405" fg:w="2"/><text x="67.2248%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$realloc (2 samples, 0.04%)</title><rect x="67.0142%" y="165" width="0.0393%" height="15" fill="rgb(229,68,48)" fg:x="3407" fg:w="2"/><text x="67.2642%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`__rdl_alloc (1 samples, 0.02%)</title><rect x="67.0535%" y="165" width="0.0197%" height="15" fill="rgb(252,8,32)" fg:x="3409" fg:w="1"/><text x="67.3035%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`__rdl_realloc (1 samples, 0.02%)</title><rect x="67.1125%" y="149" width="0.0197%" height="15" fill="rgb(223,20,43)" fg:x="3412" fg:w="1"/><text x="67.3625%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (2 samples, 0.04%)</title><rect x="67.2895%" y="117" width="0.0393%" height="15" fill="rgb(229,81,49)" fg:x="3421" fg:w="2"/><text x="67.5395%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (13 samples, 0.26%)</title><rect x="67.3289%" y="117" width="0.2557%" height="15" fill="rgb(236,28,36)" fg:x="3423" fg:w="13"/><text x="67.5789%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_pointer_size (2 samples, 0.04%)</title><rect x="67.5846%" y="117" width="0.0393%" height="15" fill="rgb(249,185,26)" fg:x="3436" fg:w="2"/><text x="67.8346%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`DYLD-STUB$$_platform_bzero (2 samples, 0.04%)</title><rect x="67.7026%" y="101" width="0.0393%" height="15" fill="rgb(249,174,33)" fg:x="3442" fg:w="2"/><text x="67.9526%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (11 samples, 0.22%)</title><rect x="67.7419%" y="101" width="0.2164%" height="15" fill="rgb(233,201,37)" fg:x="3444" fg:w="11"/><text x="67.9919%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (1 samples, 0.02%)</title><rect x="67.9583%" y="101" width="0.0197%" height="15" fill="rgb(221,78,26)" fg:x="3455" fg:w="1"/><text x="68.2083%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (1 samples, 0.02%)</title><rect x="67.9583%" y="85" width="0.0197%" height="15" fill="rgb(250,127,30)" fg:x="3455" fg:w="1"/><text x="68.2083%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`set_tiny_meta_header_in_use (1 samples, 0.02%)</title><rect x="67.9583%" y="69" width="0.0197%" height="15" fill="rgb(230,49,44)" fg:x="3455" fg:w="1"/><text x="68.2083%" y="79.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_realloc (19 samples, 0.37%)</title><rect x="67.6239%" y="117" width="0.3737%" height="15" fill="rgb(229,67,23)" fg:x="3438" fg:w="19"/><text x="67.8739%" y="127.50"></text></g><g><title>libsystem_platform.dylib`__bzero (1 samples, 0.02%)</title><rect x="67.9780%" y="101" width="0.0197%" height="15" fill="rgb(249,83,47)" fg:x="3456" fg:w="1"/><text x="68.2280%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_realloc (45 samples, 0.89%)</title><rect x="67.2502%" y="133" width="0.8851%" height="15" fill="rgb(215,43,3)" fg:x="3419" fg:w="45"/><text x="67.5002%" y="143.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove (7 samples, 0.14%)</title><rect x="67.9976%" y="117" width="0.1377%" height="15" fill="rgb(238,154,13)" fg:x="3457" fg:w="7"/><text x="68.2476%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`default_zone_realloc (2 samples, 0.04%)</title><rect x="68.1353%" y="133" width="0.0393%" height="15" fill="rgb(219,56,2)" fg:x="3464" fg:w="2"/><text x="68.3853%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`_realloc (59 samples, 1.16%)</title><rect x="67.1322%" y="149" width="1.1605%" height="15" fill="rgb(233,0,4)" fg:x="3413" fg:w="59"/><text x="67.3822%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_realloc (6 samples, 0.12%)</title><rect x="68.1747%" y="133" width="0.1180%" height="15" fill="rgb(235,30,7)" fg:x="3466" fg:w="6"/><text x="68.4247%" y="143.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::finish_grow (69 samples, 1.36%)</title><rect x="67.0732%" y="165" width="1.3572%" height="15" fill="rgb(250,79,13)" fg:x="3410" fg:w="69"/><text x="67.3232%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_size (7 samples, 0.14%)</title><rect x="68.2927%" y="149" width="0.1377%" height="15" fill="rgb(211,146,34)" fg:x="3472" fg:w="7"/><text x="68.5427%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (2 samples, 0.04%)</title><rect x="68.4304%" y="165" width="0.0393%" height="15" fill="rgb(228,22,38)" fg:x="3479" fg:w="2"/><text x="68.6804%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`_realloc (1 samples, 0.02%)</title><rect x="68.4697%" y="165" width="0.0197%" height="15" fill="rgb(235,168,5)" fg:x="3481" fg:w="1"/><text x="68.7197%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve::do_reserve_and_handle (81 samples, 1.59%)</title><rect x="66.9355%" y="181" width="1.5932%" height="15" fill="rgb(221,155,16)" fg:x="3403" fg:w="81"/><text x="67.1855%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (2 samples, 0.04%)</title><rect x="68.4894%" y="165" width="0.0393%" height="15" fill="rgb(215,215,53)" fg:x="3482" fg:w="2"/><text x="68.7394%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`__rdl_realloc (1 samples, 0.02%)</title><rect x="68.6271%" y="165" width="0.0197%" height="15" fill="rgb(223,4,10)" fg:x="3489" fg:w="1"/><text x="68.8771%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (1 samples, 0.02%)</title><rect x="68.6861%" y="117" width="0.0197%" height="15" fill="rgb(234,103,6)" fg:x="3492" fg:w="1"/><text x="68.9361%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (3 samples, 0.06%)</title><rect x="68.7057%" y="117" width="0.0590%" height="15" fill="rgb(227,97,0)" fg:x="3493" fg:w="3"/><text x="68.9557%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_realloc (3 samples, 0.06%)</title><rect x="68.7648%" y="117" width="0.0590%" height="15" fill="rgb(234,150,53)" fg:x="3496" fg:w="3"/><text x="69.0148%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (3 samples, 0.06%)</title><rect x="68.7648%" y="101" width="0.0590%" height="15" fill="rgb(228,201,54)" fg:x="3496" fg:w="3"/><text x="69.0148%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`_realloc (12 samples, 0.24%)</title><rect x="68.6467%" y="149" width="0.2360%" height="15" fill="rgb(222,22,37)" fg:x="3490" fg:w="12"/><text x="68.8967%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_realloc (10 samples, 0.20%)</title><rect x="68.6861%" y="133" width="0.1967%" height="15" fill="rgb(237,53,32)" fg:x="3492" fg:w="10"/><text x="68.9361%" y="143.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove (3 samples, 0.06%)</title><rect x="68.8238%" y="117" width="0.0590%" height="15" fill="rgb(233,25,53)" fg:x="3499" fg:w="3"/><text x="69.0738%" y="127.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::finish_grow (16 samples, 0.31%)</title><rect x="68.6467%" y="165" width="0.3147%" height="15" fill="rgb(210,40,34)" fg:x="3490" fg:w="16"/><text x="68.8967%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_size (4 samples, 0.08%)</title><rect x="68.8828%" y="149" width="0.0787%" height="15" fill="rgb(241,220,44)" fg:x="3502" fg:w="4"/><text x="69.1328%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve_for_push (23 samples, 0.45%)</title><rect x="68.5287%" y="181" width="0.4524%" height="15" fill="rgb(235,28,35)" fg:x="3484" fg:w="23"/><text x="68.7787%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`_realloc (1 samples, 0.02%)</title><rect x="68.9614%" y="165" width="0.0197%" height="15" fill="rgb(210,56,17)" fg:x="3506" fg:w="1"/><text x="69.2114%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::finish_grow (5 samples, 0.10%)</title><rect x="68.9811%" y="181" width="0.0983%" height="15" fill="rgb(224,130,29)" fg:x="3507" fg:w="5"/><text x="69.2311%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`DYLD-STUB$$_platform_memset (1 samples, 0.02%)</title><rect x="94.6302%" y="165" width="0.0197%" height="15" fill="rgb(235,212,8)" fg:x="4811" fg:w="1"/><text x="94.8802%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`_szone_free (1 samples, 0.02%)</title><rect x="94.6499%" y="165" width="0.0197%" height="15" fill="rgb(223,33,50)" fg:x="4812" fg:w="1"/><text x="94.8999%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_add_ptr (1 samples, 0.02%)</title><rect x="95.4170%" y="133" width="0.0197%" height="15" fill="rgb(219,149,13)" fg:x="4851" fg:w="1"/><text x="95.6670%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`free_tiny (40 samples, 0.79%)</title><rect x="94.6696%" y="165" width="0.7868%" height="15" fill="rgb(250,156,29)" fg:x="4813" fg:w="40"/><text x="94.9196%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (24 samples, 0.47%)</title><rect x="94.9843%" y="149" width="0.4721%" height="15" fill="rgb(216,193,19)" fg:x="4829" fg:w="24"/><text x="95.2343%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_list_remove_ptr (1 samples, 0.02%)</title><rect x="95.4367%" y="133" width="0.0197%" height="15" fill="rgb(216,135,14)" fg:x="4852" fg:w="1"/><text x="95.6867%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_calloc (2 samples, 0.04%)</title><rect x="95.4563%" y="165" width="0.0393%" height="15" fill="rgb(241,47,5)" fg:x="4853" fg:w="2"/><text x="95.7063%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`rack_get_thread_index (6 samples, 0.12%)</title><rect x="95.4957%" y="149" width="0.1180%" height="15" fill="rgb(233,42,35)" fg:x="4855" fg:w="6"/><text x="95.7457%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_from_free_list (4 samples, 0.08%)</title><rect x="95.6137%" y="149" width="0.0787%" height="15" fill="rgb(231,13,6)" fg:x="4861" fg:w="4"/><text x="95.8637%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`set_tiny_meta_header_in_use (11 samples, 0.22%)</title><rect x="95.7710%" y="133" width="0.2164%" height="15" fill="rgb(207,181,40)" fg:x="4869" fg:w="11"/><text x="96.0210%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`szone_malloc_should_clear (37 samples, 0.73%)</title><rect x="95.4957%" y="165" width="0.7278%" height="15" fill="rgb(254,173,49)" fg:x="4855" fg:w="37"/><text x="95.7457%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (27 samples, 0.53%)</title><rect x="95.6924%" y="149" width="0.5311%" height="15" fill="rgb(221,1,38)" fg:x="4865" fg:w="27"/><text x="95.9424%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_from_free_list (12 samples, 0.24%)</title><rect x="95.9874%" y="133" width="0.2360%" height="15" fill="rgb(206,124,46)" fg:x="4880" fg:w="12"/><text x="96.2374%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`_tiny_check_and_zero_inline_meta_from_freelist (2 samples, 0.04%)</title><rect x="96.1841%" y="117" width="0.0393%" height="15" fill="rgb(249,21,11)" fg:x="4890" fg:w="2"/><text x="96.4341%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (4 samples, 0.08%)</title><rect x="96.2234%" y="165" width="0.0787%" height="15" fill="rgb(222,201,40)" fg:x="4892" fg:w="4"/><text x="96.4734%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`tiny_malloc_should_clear (1 samples, 0.02%)</title><rect x="96.3021%" y="165" width="0.0197%" height="15" fill="rgb(235,61,29)" fg:x="4896" fg:w="1"/><text x="96.5521%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`aoc_2023::day12::count_arrangements (1,402 samples, 27.58%)</title><rect x="69.0795%" y="181" width="27.5767%" height="15" fill="rgb(219,207,3)" fg:x="3512" fg:w="1402"/><text x="69.3295%" y="191.50">day12_benchmark-685b351db9bfd74a`aoc_2023::d..</text></g><g><title>libsystem_platform.dylib`_platform_memset (17 samples, 0.33%)</title><rect x="96.3218%" y="165" width="0.3344%" height="15" fill="rgb(222,56,46)" fg:x="4897" fg:w="17"/><text x="96.5718%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_calloc (3 samples, 0.06%)</title><rect x="96.6562%" y="181" width="0.0590%" height="15" fill="rgb(239,76,54)" fg:x="4914" fg:w="3"/><text x="96.9062%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (7 samples, 0.14%)</title><rect x="96.7152%" y="181" width="0.1377%" height="15" fill="rgb(231,124,27)" fg:x="4917" fg:w="7"/><text x="96.9652%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`_szone_free (2 samples, 0.04%)</title><rect x="96.8529%" y="181" width="0.0393%" height="15" fill="rgb(249,195,6)" fg:x="4924" fg:w="2"/><text x="97.1029%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`free (2 samples, 0.04%)</title><rect x="96.8922%" y="181" width="0.0393%" height="15" fill="rgb(237,174,47)" fg:x="4926" fg:w="2"/><text x="97.1422%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`free_tiny (3 samples, 0.06%)</title><rect x="96.9315%" y="181" width="0.0590%" height="15" fill="rgb(206,201,31)" fg:x="4928" fg:w="3"/><text x="97.1815%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (1 samples, 0.02%)</title><rect x="96.9709%" y="165" width="0.0197%" height="15" fill="rgb(231,57,52)" fg:x="4930" fg:w="1"/><text x="97.2209%" y="175.50"></text></g><g><title>libsystem_malloc.dylib`szone_calloc (1 samples, 0.02%)</title><rect x="96.9906%" y="181" width="0.0197%" height="15" fill="rgb(248,177,22)" fg:x="4931" fg:w="1"/><text x="97.2406%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`tiny_free_no_lock (1 samples, 0.02%)</title><rect x="97.0102%" y="181" width="0.0197%" height="15" fill="rgb(215,211,37)" fg:x="4932" fg:w="1"/><text x="97.2602%" y="191.50"></text></g><g><title>libsystem_platform.dylib`__bzero (1 samples, 0.02%)</title><rect x="97.0299%" y="181" width="0.0197%" height="15" fill="rgb(241,128,51)" fg:x="4933" fg:w="1"/><text x="97.2799%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;core::iter::adapters::map::Map&lt;I,F&gt; as core::iter::traits::iterator::Iterator&gt;::fold (1,544 samples, 30.37%)</title><rect x="66.7585%" y="197" width="30.3698%" height="15" fill="rgb(227,165,31)" fg:x="3394" fg:w="1544"/><text x="67.0085%" y="207.50">day12_benchmark-685b351db9bfd74a`&lt;core::iter::ada..</text></g><g><title>libsystem_platform.dylib`_platform_memset (4 samples, 0.08%)</title><rect x="97.0496%" y="181" width="0.0787%" height="15" fill="rgb(228,167,24)" fg:x="4934" fg:w="4"/><text x="97.2996%" y="191.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`DYLD-STUB$$memcpy (3 samples, 0.06%)</title><rect x="97.1282%" y="197" width="0.0590%" height="15" fill="rgb(228,143,12)" fg:x="4938" fg:w="3"/><text x="97.3782%" y="207.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve::do_reserve_and_handle (1 samples, 0.02%)</title><rect x="97.1873%" y="197" width="0.0197%" height="15" fill="rgb(249,149,8)" fg:x="4941" fg:w="1"/><text x="97.4373%" y="207.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve_for_push (1 samples, 0.02%)</title><rect x="97.2069%" y="197" width="0.0197%" height="15" fill="rgb(243,35,44)" fg:x="4942" fg:w="1"/><text x="97.4569%" y="207.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;F as nom::internal::Parser&lt;I,O,E&gt;&gt;::parse (1 samples, 0.02%)</title><rect x="97.2659%" y="165" width="0.0197%" height="15" fill="rgb(246,89,9)" fg:x="4945" fg:w="1"/><text x="97.5159%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;&amp;str as nom::traits::FindToken&lt;char&gt;&gt;::find_token (43 samples, 0.85%)</title><rect x="97.6397%" y="133" width="0.8458%" height="15" fill="rgb(233,213,13)" fg:x="4964" fg:w="43"/><text x="97.8897%" y="143.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;&amp;str as nom::traits::InputTakeAtPosition&gt;::split_at_position1_complete (7 samples, 0.14%)</title><rect x="98.4854%" y="133" width="0.1377%" height="15" fill="rgb(233,141,41)" fg:x="5007" fg:w="7"/><text x="98.7354%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (1 samples, 0.02%)</title><rect x="98.6428%" y="69" width="0.0197%" height="15" fill="rgb(239,167,4)" fg:x="5015" fg:w="1"/><text x="98.8928%" y="79.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_pointer_size (1 samples, 0.02%)</title><rect x="98.6625%" y="69" width="0.0197%" height="15" fill="rgb(209,217,16)" fg:x="5016" fg:w="1"/><text x="98.9125%" y="79.50"></text></g><g><title>libsystem_malloc.dylib`_realloc (3 samples, 0.06%)</title><rect x="98.6428%" y="101" width="0.0590%" height="15" fill="rgb(219,88,35)" fg:x="5015" fg:w="3"/><text x="98.8928%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_realloc (3 samples, 0.06%)</title><rect x="98.6428%" y="85" width="0.0590%" height="15" fill="rgb(220,193,23)" fg:x="5015" fg:w="3"/><text x="98.8928%" y="95.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_realloc (1 samples, 0.02%)</title><rect x="98.6821%" y="69" width="0.0197%" height="15" fill="rgb(230,90,52)" fg:x="5017" fg:w="1"/><text x="98.9321%" y="79.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::finish_grow (6 samples, 0.12%)</title><rect x="98.6231%" y="117" width="0.1180%" height="15" fill="rgb(252,106,19)" fg:x="5014" fg:w="6"/><text x="98.8731%" y="127.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_allocate_outlined (2 samples, 0.04%)</title><rect x="98.7018%" y="101" width="0.0393%" height="15" fill="rgb(206,74,20)" fg:x="5018" fg:w="2"/><text x="98.9518%" y="111.50"></text></g><g><title>libsystem_malloc.dylib`_malloc_zone_malloc (1 samples, 0.02%)</title><rect x="98.7411%" y="117" width="0.0197%" height="15" fill="rgb(230,138,44)" fg:x="5020" fg:w="1"/><text x="98.9911%" y="127.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;F as nom::internal::Parser&lt;I,O,E&gt;&gt;::parse (76 samples, 1.49%)</title><rect x="97.3053%" y="149" width="1.4949%" height="15" fill="rgb(235,182,43)" fg:x="4947" fg:w="76"/><text x="97.5553%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`alloc::raw_vec::RawVec&lt;T,A&gt;::reserve_for_push (9 samples, 0.18%)</title><rect x="98.6231%" y="133" width="0.1770%" height="15" fill="rgb(242,16,51)" fg:x="5014" fg:w="9"/><text x="98.8731%" y="143.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (2 samples, 0.04%)</title><rect x="98.7608%" y="117" width="0.0393%" height="15" fill="rgb(248,9,4)" fg:x="5021" fg:w="2"/><text x="99.0108%" y="127.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;core::str::iter::Lines as core::iter::traits::iterator::Iterator&gt;::next (1 samples, 0.02%)</title><rect x="98.8002%" y="149" width="0.0197%" height="15" fill="rgb(210,31,22)" fg:x="5023" fg:w="1"/><text x="99.0502%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`core::num::_&lt;impl core::str::traits::FromStr for u64&gt;::from_str (2 samples, 0.04%)</title><rect x="98.8198%" y="149" width="0.0393%" height="15" fill="rgb(239,54,39)" fg:x="5024" fg:w="2"/><text x="99.0698%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`core::slice::memchr::memchr_aligned (12 samples, 0.24%)</title><rect x="98.8592%" y="149" width="0.2360%" height="15" fill="rgb(230,99,41)" fg:x="5026" fg:w="12"/><text x="99.1092%" y="159.50"></text></g><g><title>libsystem_malloc.dylib`nanov2_malloc (1 samples, 0.02%)</title><rect x="99.0952%" y="149" width="0.0197%" height="15" fill="rgb(253,106,12)" fg:x="5038" fg:w="1"/><text x="99.3452%" y="159.50"></text></g><g><title>libsystem_platform.dylib`_platform_memcmp (1 samples, 0.02%)</title><rect x="99.1149%" y="149" width="0.0197%" height="15" fill="rgb(213,46,41)" fg:x="5039" fg:w="1"/><text x="99.3649%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;core::iter::adapters::map::Map&lt;I,F&gt; as core::iter::traits::iterator::Iterator&gt;::try_fold (99 samples, 1.95%)</title><rect x="97.2856%" y="165" width="1.9473%" height="15" fill="rgb(215,133,35)" fg:x="4946" fg:w="99"/><text x="97.5356%" y="175.50">d..</text></g><g><title>libsystem_platform.dylib`_platform_memmove (5 samples, 0.10%)</title><rect x="99.1345%" y="149" width="0.0983%" height="15" fill="rgb(213,28,5)" fg:x="5040" fg:w="5"/><text x="99.3845%" y="159.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_iter (103 samples, 2.03%)</title><rect x="97.2266%" y="181" width="2.0260%" height="15" fill="rgb(215,77,49)" fg:x="4943" fg:w="103"/><text x="97.4766%" y="191.50">d..</text></g><g><title>day12_benchmark-685b351db9bfd74a`core::str::_&lt;impl str&gt;::trim_matches (1 samples, 0.02%)</title><rect x="99.2329%" y="165" width="0.0197%" height="15" fill="rgb(248,100,22)" fg:x="5045" fg:w="1"/><text x="99.4829%" y="175.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`core::iter::adapters::try_process (104 samples, 2.05%)</title><rect x="97.2266%" y="197" width="2.0456%" height="15" fill="rgb(208,67,9)" fg:x="4943" fg:w="104"/><text x="97.4766%" y="207.50">d..</text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;core::iter::adapters::map::Map&lt;I,F&gt; as core::iter::traits::iterator::Iterator&gt;::try_fold (1 samples, 0.02%)</title><rect x="99.2526%" y="181" width="0.0197%" height="15" fill="rgb(219,133,21)" fg:x="5046" fg:w="1"/><text x="99.5026%" y="191.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (4 samples, 0.08%)</title><rect x="99.2722%" y="197" width="0.0787%" height="15" fill="rgb(246,46,29)" fg:x="5047" fg:w="4"/><text x="99.5222%" y="207.50"></text></g><g><title>libsystem_malloc.dylib`_szone_free (1 samples, 0.02%)</title><rect x="99.3509%" y="197" width="0.0197%" height="15" fill="rgb(246,185,52)" fg:x="5051" fg:w="1"/><text x="99.6009%" y="207.50"></text></g><g><title>libsystem_malloc.dylib`free (3 samples, 0.06%)</title><rect x="99.3706%" y="197" width="0.0590%" height="15" fill="rgb(252,136,11)" fg:x="5052" fg:w="3"/><text x="99.6206%" y="207.50"></text></g><g><title>libsystem_platform.dylib`_platform_memmove (24 samples, 0.47%)</title><rect x="99.4296%" y="197" width="0.4721%" height="15" fill="rgb(219,138,53)" fg:x="5055" fg:w="24"/><text x="99.6796%" y="207.50"></text></g><g><title>day12_benchmark-685b351db9bfd74a`aoc_2023::day12::part2 (1,687 samples, 33.18%)</title><rect x="66.7585%" y="213" width="33.1825%" height="15" fill="rgb(211,51,23)" fg:x="3394" fg:w="1687"/><text x="67.0085%" y="223.50">day12_benchmark-685b351db9bfd74a`aoc_2023::day12::part2</text></g><g><title>libsystem_platform.dylib`_platform_memset (2 samples, 0.04%)</title><rect x="99.9017%" y="197" width="0.0393%" height="15" fill="rgb(247,221,28)" fg:x="5079" fg:w="2"/><text x="100.1517%" y="207.50"></text></g><g><title>libsystem_malloc.dylib`_nanov2_free (1 samples, 0.02%)</title><rect x="99.9410%" y="213" width="0.0197%" height="15" fill="rgb(251,222,45)" fg:x="5081" fg:w="1"/><text x="100.1910%" y="223.50"></text></g><g><title>all (5,084 samples, 100%)</title><rect x="0.0000%" y="405" width="100.0000%" height="15" fill="rgb(217,162,53)" fg:x="0" fg:w="5084"/><text x="0.2500%" y="415.50"></text></g><g><title>dyld`start (5,084 samples, 100.00%)</title><rect x="0.0000%" y="389" width="100.0000%" height="15" fill="rgb(229,93,14)" fg:x="0" fg:w="5084"/><text x="0.2500%" y="399.50">dyld`start</text></g><g><title>day12_benchmark-685b351db9bfd74a`main (5,084 samples, 100.00%)</title><rect x="0.0000%" y="373" width="100.0000%" height="15" fill="rgb(209,67,49)" fg:x="0" fg:w="5084"/><text x="0.2500%" y="383.50">day12_benchmark-685b351db9bfd74a`main</text></g><g><title>day12_benchmark-685b351db9bfd74a`std::rt::lang_start_internal (5,084 samples, 100.00%)</title><rect x="0.0000%" y="357" width="100.0000%" height="15" fill="rgb(213,87,29)" fg:x="0" fg:w="5084"/><text x="0.2500%" y="367.50">day12_benchmark-685b351db9bfd74a`std::rt::lang_start_internal</text></g><g><title>day12_benchmark-685b351db9bfd74a`std::rt::lang_start::_{{closure}} (5,084 samples, 100.00%)</title><rect x="0.0000%" y="341" width="100.0000%" height="15" fill="rgb(205,151,52)" fg:x="0" fg:w="5084"/><text x="0.2500%" y="351.50">day12_benchmark-685b351db9bfd74a`std::rt::lang_start::_{{closure}}</text></g><g><title>day12_benchmark-685b351db9bfd74a`std::sys_common::backtrace::__rust_begin_short_backtrace (5,084 samples, 100.00%)</title><rect x="0.0000%" y="325" width="100.0000%" height="15" fill="rgb(253,215,39)" fg:x="0" fg:w="5084"/><text x="0.2500%" y="335.50">day12_benchmark-685b351db9bfd74a`std::sys_common::backtrace::__rust_begin_short_backtrace</text></g><g><title>day12_benchmark-685b351db9bfd74a`day12_benchmark::main (5,084 samples, 100.00%)</title><rect x="0.0000%" y="309" width="100.0000%" height="15" fill="rgb(221,220,41)" fg:x="0" fg:w="5084"/><text x="0.2500%" y="319.50">day12_benchmark-685b351db9bfd74a`day12_benchmark::main</text></g><g><title>day12_benchmark-685b351db9bfd74a`criterion::Criterion&lt;M&gt;::bench_function (5,082 samples, 99.96%)</title><rect x="0.0393%" y="293" width="99.9607%" height="15" fill="rgb(218,133,21)" fg:x="2" fg:w="5082"/><text x="0.2893%" y="303.50">day12_benchmark-685b351db9bfd74a`criterion::Criterion&lt;M&gt;::bench_function</text></g><g><title>day12_benchmark-685b351db9bfd74a`criterion::benchmark_group::BenchmarkGroup&lt;M&gt;::bench_function (5,082 samples, 99.96%)</title><rect x="0.0393%" y="277" width="99.9607%" height="15" fill="rgb(221,193,43)" fg:x="2" fg:w="5082"/><text x="0.2893%" y="287.50">day12_benchmark-685b351db9bfd74a`criterion::benchmark_group::BenchmarkGroup&lt;M&gt;::bench_function</text></g><g><title>day12_benchmark-685b351db9bfd74a`criterion::routine::Routine::profile (5,082 samples, 99.96%)</title><rect x="0.0393%" y="261" width="99.9607%" height="15" fill="rgb(240,128,52)" fg:x="2" fg:w="5082"/><text x="0.2893%" y="271.50">day12_benchmark-685b351db9bfd74a`criterion::routine::Routine::profile</text></g><g><title>day12_benchmark-685b351db9bfd74a`&lt;criterion::routine::Function&lt;M,F,T&gt; as criterion::routine::Routine&lt;M,T&gt;&gt;::warm_up (1,690 samples, 33.24%)</title><rect x="66.7585%" y="245" width="33.2415%" height="15" fill="rgb(253,114,12)" fg:x="3394" fg:w="1690"/><text x="67.0085%" y="255.50">day12_benchmark-685b351db9bfd74a`&lt;criterion::routine::..</text></g><g><title>day12_benchmark-685b351db9bfd74a`criterion::bencher::Bencher&lt;M&gt;::iter (1,690 samples, 33.24%)</title><rect x="66.7585%" y="229" width="33.2415%" height="15" fill="rgb(215,223,47)" fg:x="3394" fg:w="1690"/><text x="67.0085%" y="239.50">day12_benchmark-685b351db9bfd74a`criterion::bencher::B..</text></g><g><title>libsystem_malloc.dylib`free (2 samples, 0.04%)</title><rect x="99.9607%" y="213" width="0.0393%" height="15" fill="rgb(248,225,23)" fg:x="5082" fg:w="2"/><text x="100.2107%" y="223.50"></text></g></svg></svg>
