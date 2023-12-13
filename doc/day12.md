@@ -60,7 +60,7 @@ day12/part2             time:   [69.842 ms 70.140 ms 70.489 ms]
 
 and the profile indicated that we're bleeding a little bit of time doing hash lookups on each recursive call:
 
-![[day12_memo.svg]]
+![Memoization profile](./day12_memo.svg)
 
 ## Speeding it up
 
@@ -109,7 +109,7 @@ day12/part2             time:   [11.034 ms 11.096 ms 11.155 ms]
 
 and the profile doesn't indicate much low-hanging fruit.
 
-![[day12_2ddp.svg]]
+![2-dimensional DP profile](./day12_2ddp.svg)
 
 ## Grasping at straws
 
@@ -134,4 +134,4 @@ day12/part2             time:   [3.3608 ms 3.3666 ms 3.3730 ms]
 ```
 
 and a pretty uninformative profile
-![[day12_1ddp.svg]]
+![1-dimensional DP profile](./day12_1ddp.svg)
