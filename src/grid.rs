@@ -1,6 +1,6 @@
 use anyhow::bail;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Grid<T> {
     height: i32,
     width: i32,
@@ -64,7 +64,24 @@ impl<T> Grid<T> {
     }
 }
 
-use std::fmt::{Debug, Write};
+impl<T> Index<(i32, i32)> for Grid<T> {
+    type Output = T;
+
+    fn index(&self, (i, j): (i32, i32)) -> &T {
+        &self.rows[i as usize][j as usize]
+    }
+}
+
+impl<T> IndexMut<(i32, i32)> for Grid<T> {
+    fn index_mut(&mut self, (i, j): (i32, i32)) -> &mut T {
+        &mut self.rows[i as usize][j as usize]
+    }
+}
+
+use std::{
+    fmt::{Debug, Write},
+    ops::{Index, IndexMut},
+};
 impl<T> Debug for Grid<T>
 where
     T: Debug,
