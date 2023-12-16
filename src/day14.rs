@@ -101,7 +101,6 @@ In the above example, after 1000000000 cycles, the total load on the north suppo
 Run the spin cycle for 1000000000 cycles. Afterward, what is the total load on the north support beams?
 */
 
-use std::{collections::{HashMap, hash_map::Entry}, fmt::{Debug, Write}};
 use crate::grid::Grid;
 use anyhow::anyhow;
 use nom::{
@@ -112,6 +111,10 @@ use nom::{
     multi::{many1, separated_list1},
     sequence::delimited,
     IResult,
+};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    fmt::{Debug, Write},
 };
 
 pub fn part1(input: &str) -> anyhow::Result<i32> {
@@ -128,7 +131,7 @@ pub fn part1(input: &str) -> anyhow::Result<i32> {
 pub fn part2(input: &str) -> anyhow::Result<i32> {
     let mut grid = parse_input(input)?;
 
-    let mut record : HashMap<Grid<Cell>, usize> = HashMap::new();
+    let mut record: HashMap<Grid<Cell>, usize> = HashMap::new();
     let mut idx = 0;
     let cycle_length = loop {
         match record.entry(grid.clone()) {
