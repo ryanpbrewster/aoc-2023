@@ -30,6 +30,12 @@ impl<T> Grid<T> {
     pub fn width(&self) -> i32 {
         self.width
     }
+    pub fn size(&self) -> Dimensions {
+        Dimensions {
+            height: self.height,
+            width: self.width,
+        }
+    }
     pub fn rows(&self) -> &Vec<Vec<T>> {
         &self.rows
     }
@@ -62,6 +68,33 @@ impl<T> Grid<T> {
         itertools::iproduct!(0..self.height, 0..self.width)
             .map(|(i, j)| ((i, j), &self.rows[i as usize][j as usize]))
     }
+}
+#[derive(Debug, PartialEq, Eq)]
+pub struct Dimensions {
+    pub height: i32,
+    pub width: i32,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct Position(pub i32, pub i32);
+impl Position {
+    pub fn step(self, dir: Direction) -> Self {
+        let Position(i, j) = self;
+        match dir {
+            Direction::Up => Position(i - 1, j),
+            Direction::Down => Position(i + 1, j),
+            Direction::Left => Position(i, j - 1),
+            Direction::Right => Position(i, j + 1),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord, Hash)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 impl<T> Index<(i32, i32)> for Grid<T> {

@@ -256,10 +256,7 @@ impl Debug for Cell {
 }
 fn parse_input(input: &str) -> anyhow::Result<Grid<Cell>> {
     let input = input.trim();
-    let (_, grid) = grid_parser(input).map_err(|err| {
-        let var_name = anyhow!("could not parse {input}: {err}");
-        var_name
-    })?;
+    let (_, grid) = grid_parser(input).map_err(|err| anyhow!("could not parse {input}: {err}"))?;
     Ok(grid)
 }
 fn grid_parser(input: &str) -> IResult<&str, Grid<Cell>> {
