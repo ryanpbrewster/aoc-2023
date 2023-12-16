@@ -59,6 +59,40 @@ Ultimately, in this example, 46 tiles become energized.
 The light isn't energizing enough tiles to produce lava; to debug the contraption, you need to start by analyzing the current situation. With the beam starting in the top-left heading right, how many tiles end up being energized?
 
 */
+/*
+
+--- Part Two ---
+As you try to work out what might be wrong, the reindeer tugs on your shirt and leads you to a nearby control panel. There, a collection of buttons lets you align the contraption so that the beam enters from any edge tile and heading away from that edge. (You can choose either of two directions for the beam if it starts on a corner; for instance, if the beam starts in the bottom-right corner, it can start heading either left or upward.)
+
+So, the beam could start on any tile in the top row (heading downward), any tile in the bottom row (heading upward), any tile in the leftmost column (heading right), or any tile in the rightmost column (heading left). To produce lava, you need to find the configuration that energizes as many tiles as possible.
+
+In the above example, this can be achieved by starting the beam in the fourth tile from the left in the top row:
+
+.|<2<\....
+|v-v\^....
+.v.v.|->>>
+.v.v.v^.|.
+.v.v.v^...
+.v.v.v^..\
+.v.v/2\\..
+<-2-/vv|..
+.|<<<2-|.\
+.v//.|.v..
+Using this configuration, 51 tiles are energized:
+
+.#####....
+.#.#.#....
+.#.#.#####
+.#.#.##...
+.#.#.##...
+.#.#.##...
+.#.#####..
+########..
+.#######..
+.#...#.#..
+Find the initial beam configuration that energizes the largest number of tiles; how many tiles are energized in that configuration?
+
+*/
 
 use anyhow::anyhow;
 use nom::{
@@ -76,82 +110,62 @@ use std::{
 };
 pub fn part1(input: &str) -> anyhow::Result<usize> {
     let grid = parse_input(input)?;
+    Ok(count_energized(&grid, (Position(0, 0), Direction::Right)))
+}
 
-    #[derive(PartialEq, Eq, Clone, Copy, Hash, Debug)]
-    struct Entry {
-        pos: Position,
-        dir: Direction,
-    }
-    let mut vis: HashSet<Entry> = HashSet::new();
-    let mut stack: Vec<Entry> = vec![Entry {
-        pos: Position(0, 0),
-        dir: Direction::Right,
-    }];
-    while let Some(
-        entry @ Entry {
-            pos: pos @ Position(i, j),
-            dir,
-        },
-    ) = stack.pop()
-    {
+pub fn part2(input: &str) -> anyhow::Result<usize> {
+    let grid = parse_input(input)?;
+    let up = (0..grid.width())
+        .map(|j| count_energized(&grid, (Position(grid.height() - 1, j), Direction::Up)));
+    let down = (0..grid.width()).map(|j| count_energized(&grid, (Position(0, j), Direction::Down)));
+    let right =
+        (0..grid.height()).map(|i| count_energized(&grid, (Position(i, 0), Direction::Right)));
+    let left = (0..grid.height())
+        .map(|i| count_energized(&grid, (Position(i, grid.width() - 1), Direction::Left)));
+    Ok(up.chain(down).chain(left).chain(right).max().unwrap_or(0))
+}
+
+fn count_energized(grid: &Grid<Cell>, enter: (Position, Direction)) -> usize {
+    let mut vis: HashSet<(Position, Direction)> = HashSet::new();
+    let mut stack: Vec<(Position, Direction)> = vec![enter];
+    while let Some(e) = stack.pop() {
+        let (pos @ Position(i, j), dir) = e;
         let Some(ch) = grid.get(i, j) else { continue };
-        if !vis.insert(entry) {
+        if !vis.insert(e) {
             continue;
         }
-        match ch {
-            Cell::Ground => stack.push(Entry {
-                pos: pos.step(dir),
-                dir,
-            }),
-            Cell::MirrorUp => {
-                // aka '/'
-                let next_dir = match dir {
-                    Direction::Up => Direction::Right,
-                    Direction::Down => Direction::Left,
-                    Direction::Left => Direction::Down,
-                    Direction::Right => Direction::Up,
-                };
-                stack.push(Entry {
-                    pos: pos.step(next_dir),
-                    dir: next_dir,
-                });
+        let next_dirs = match ch {
+            Cell::Ground => vec![dir],
+            Cell::MirrorUp /* aka '/' */ => match dir {
+                Direction::Up => vec![Direction::Right],
+                Direction::Down => vec![Direction::Left],
+                Direction::Left => vec![Direction::Down],
+                Direction::Right => vec![Direction::Up],
+            },
+            Cell::MirrorDown /* aka '\' */ => match dir {
+                Direction::Up => vec![Direction::Left],
+                Direction::Down => vec![Direction::Right],
+                Direction::Left => vec![Direction::Up],
+                Direction::Right => vec![Direction::Down],
+            },
+            Cell::SplitHoriz => match dir {
+                Direction::Up | Direction::Down => vec![Direction::Left, Direction::Right],
+                Direction::Left | Direction::Right => vec![dir],
             }
-            Cell::MirrorDown => {
-                // aka '\'
-                let next_dir = match dir {
-                    Direction::Up => Direction::Left,
-                    Direction::Down => Direction::Right,
-                    Direction::Left => Direction::Up,
-                    Direction::Right => Direction::Down,
-                };
-                stack.push(Entry {
-                    pos: pos.step(next_dir),
-                    dir: next_dir,
-                });
+            Cell::SplitVert => match dir {
+                Direction::Up | Direction::Down => vec![dir],
+                Direction::Left | Direction::Right => vec![Direction::Up, Direction::Down],
             }
-            Cell::SplitHoriz => {
-                let next_dirs = match dir {
-                    Direction::Up | Direction::Down => vec![Direction::Left, Direction::Right],
-                    Direction::Left | Direction::Right => vec![dir],
-                };
-                stack.extend(next_dirs.into_iter().map(|next_dir| Entry {
-                    pos: pos.step(next_dir),
-                    dir: next_dir,
-                }));
-            }
-            Cell::SplitVert => {
-                let next_dirs = match dir {
-                    Direction::Up | Direction::Down => vec![dir],
-                    Direction::Left | Direction::Right => vec![Direction::Up, Direction::Down],
-                };
-                stack.extend(next_dirs.into_iter().map(|next_dir| Entry {
-                    pos: pos.step(next_dir),
-                    dir: next_dir,
-                }));
-            }
+        };
+        for next_dir in next_dirs {
+            stack.push((pos.step(next_dir), next_dir));
         }
     }
-    Ok(vis.into_iter().map(|e| e.pos).collect::<HashSet<_>>().len())
+    // Count just the distinct positions we energized
+    vis.into_iter()
+        .map(|(pos, _dir)| pos)
+        .collect::<HashSet<_>>()
+        .len()
 }
 
 fn parse_input(input: &str) -> anyhow::Result<Grid<Cell>> {
@@ -237,6 +251,19 @@ mod test {
         assert_eq!(
             part1(&std::fs::read_to_string("data/day16.input").unwrap()).unwrap(),
             7236,
+        );
+    }
+
+    #[test]
+    fn part2_sample_input() {
+        assert_eq!(part2(SAMPLE_INPUT).unwrap(), 51);
+    }
+
+    #[test]
+    fn part2_real_input() {
+        assert_eq!(
+            part2(&std::fs::read_to_string("data/day16.input").unwrap()).unwrap(),
+            7521,
         );
     }
 }
