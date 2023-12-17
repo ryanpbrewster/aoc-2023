@@ -50,6 +50,50 @@ This path never moves more than three consecutive blocks in the same direction a
 
 Directing the crucible from the lava pool to the machine parts factory, but not moving more than three consecutive blocks in the same direction, what is the least heat loss it can incur?
 */
+/*
+
+--- Part Two ---
+The crucibles of lava simply aren't large enough to provide an adequate supply of lava to the machine parts factory. Instead, the Elves are going to upgrade to ultra crucibles.
+
+Ultra crucibles are even more difficult to steer than normal crucibles. Not only do they have trouble going in a straight line, but they also have trouble turning!
+
+Once an ultra crucible starts moving in a direction, it needs to move a minimum of four blocks in that direction before it can turn (or even before it can stop at the end). However, it will eventually start to get wobbly: an ultra crucible can move a maximum of ten consecutive blocks without turning.
+
+In the above example, an ultra crucible could follow this path to minimize heat loss:
+
+2>>>>>>>>1323
+32154535v5623
+32552456v4254
+34465858v5452
+45466578v>>>>
+143859879845v
+445787698776v
+363787797965v
+465496798688v
+456467998645v
+122468686556v
+254654888773v
+432267465553v
+In the above example, an ultra crucible would incur the minimum possible heat loss of 94.
+
+Here's another example:
+
+111111111111
+999999999991
+999999999991
+999999999991
+999999999991
+Sadly, an ultra crucible would need to take an unfortunate path like this one:
+
+1>>>>>>>1111
+9999999v9991
+9999999v9991
+9999999v9991
+9999999v>>>>
+This route causes the ultra crucible to incur the minimum possible heat loss of 71.
+
+Directing the ultra crucible from the lava pool to the machine parts factory, what is the least heat loss it can incur?
+*/
 
 use std::{
     cmp::Reverse,
@@ -69,18 +113,24 @@ use crate::grid::{Direction, Grid, Position};
 
 pub fn part1(input: &str) -> anyhow::Result<u32> {
     let grid = parse_input(input)?;
-    Ok(minimal_heat_loss_path(&grid))
+    Ok(minimal_heat_loss_path(&grid, 1, 3))
 }
 
-fn minimal_heat_loss_path(grid: &Grid<u32>) -> u32 {
-    let max_gas = 3;
+pub fn part2(input: &str) -> anyhow::Result<u32> {
+    let grid = parse_input(input)?;
+    Ok(minimal_heat_loss_path(&grid, 4, 10))
+}
+
+fn minimal_heat_loss_path(grid: &Grid<u32>, min_steps: usize, max_steps: usize) -> u32 {
+    assert!(min_steps <= max_steps);
     let destination = Position(grid.height() - 1, grid.width() - 1);
     let mut queue: PriorityQueue = PriorityQueue::default();
     queue.push(
         Location {
             position: Position(0, 0),
             direction: Direction::Right,
-            gas: max_gas,
+            min_gas: 0,
+            max_gas: max_steps,
         },
         0,
     );
@@ -92,46 +142,53 @@ fn minimal_heat_loss_path(grid: &Grid<u32>) -> u32 {
                 Location {
                     position,
                     direction,
-                    gas,
+                    min_gas,
+                    max_gas,
                 },
         } = cur;
+        if max_gas > 0 {
+            let dir = direction;
+            let next = position.step(dir);
+            let loc = Location {
+                position: next,
+                direction: dir,
+                min_gas: min_gas.saturating_sub(1),
+                max_gas: max_gas - 1,
+            };
+            if let Some(c) = grid.get(next.0, next.1) {
+                queue.push(loc, heat_loss + c);
+            }
+        }
+        if min_gas > 0 {
+            continue;
+        }
         if position == destination {
             return heat_loss;
         }
-        if gas > 0 {
-            let dir = direction;
-            let next @ Position(i, j) = position.step(dir);
-            let loc = Location {
-                position: next,
-                direction: dir,
-                gas: gas - 1,
-            };
-            if let Some(&cost) = grid.get(i, j) {
-                queue.push(loc, heat_loss + cost);
-            }
-        }
         {
             let dir = direction.clockwise();
-            let next @ Position(i, j) = position.step(dir);
+            let next = position.step(dir);
             let loc = Location {
                 position: next,
                 direction: dir,
-                gas: max_gas - 1,
+                min_gas: min_steps - 1,
+                max_gas: max_steps - 1,
             };
-            if let Some(&cost) = grid.get(i, j) {
-                queue.push(loc, heat_loss + cost);
+            if let Some(c) = grid.get(next.0, next.1) {
+                queue.push(loc, heat_loss + c);
             }
         }
         {
             let dir = direction.counter_clockwise();
-            let next @ Position(i, j) = position.step(dir);
+            let next = position.step(dir);
             let loc = Location {
                 position: next,
                 direction: dir,
-                gas: max_gas - 1,
+                min_gas: min_steps - 1,
+                max_gas: max_steps - 1,
             };
-            if let Some(&cost) = grid.get(i, j) {
-                queue.push(loc, heat_loss + cost);
+            if let Some(c) = grid.get(next.0, next.1) {
+                queue.push(loc, heat_loss + c);
             }
         }
     }
@@ -165,7 +222,8 @@ struct Entry {
 struct Location {
     position: Position,
     direction: Direction,
-    gas: u32, // how many steps we can take in this direction before we must turn
+    min_gas: usize, // how many steps must we take in this direction before we can turn
+    max_gas: usize, // how many steps can we take in this direction before we must turn
 }
 
 fn parse_input(input: &str) -> anyhow::Result<Grid<u32>> {
@@ -230,7 +288,43 @@ mod test {
     fn part1_real_input() {
         assert_eq!(
             part1(&std::fs::read_to_string("data/day17.input").unwrap()).unwrap(),
-            771
+            771,
+        );
+    }
+
+    #[test]
+    fn part2_sample_input() {
+        assert_eq!(part2(SAMPLE_INPUT).unwrap(), 94);
+
+        assert_eq!(
+            part2(
+                "
+            111111111111
+            999999999991
+            999999999991
+            999999999991
+            999999999991
+        "
+            )
+            .unwrap(),
+            71
+        );
+    }
+
+    #[test]
+    fn part2_real_input() {
+        assert_eq!(
+            parse_input(&std::fs::read_to_string("data/day17.input").unwrap())
+                .unwrap()
+                .size(),
+            Dimensions {
+                height: 141,
+                width: 141
+            },
+        );
+        assert_eq!(
+            part2(&std::fs::read_to_string("data/day17.input").unwrap()).unwrap(),
+            927,
         );
     }
 }
