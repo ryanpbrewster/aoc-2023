@@ -115,7 +115,8 @@ pub fn part1(input: &str) -> anyhow::Result<usize> {
     let input = parse_input(input)?;
 
     let mut cur = "AAA";
-    for (i, &dir) in input.directions.iter().cycle().enumerate() {
+    let upper_bound = input.directions.len() * input.graph.len();
+    for (i, &dir) in input.directions.iter().cycle().enumerate().take(upper_bound) {
         if cur == "ZZZ" {
             return Ok(i);
         }
@@ -127,7 +128,7 @@ pub fn part1(input: &str) -> anyhow::Result<usize> {
             Direction::Right => r,
         };
     }
-    unreachable!()
+    bail!("did not reach an exit, giving up after {upper_bound} steps");
 }
 
 pub fn part2(input: &str) -> anyhow::Result<usize> {
@@ -331,5 +332,17 @@ mod test {
             part2(&std::fs::read_to_string("data/day08.input").unwrap()).unwrap(),
             9064949303801,
         );
+    }
+
+    #[test]
+    fn fuzz_artifact_1() {
+        assert!(part1("
+            R     AAA     =
+
+            (x, R)
+            
+            =       R 
+            (x, R)           
+        ").is_err());
     }
 }

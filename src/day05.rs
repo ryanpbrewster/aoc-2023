@@ -182,7 +182,7 @@ use nom::{
 };
 
 pub fn part1(input: &str) -> anyhow::Result<i64> {
-    let almanac = parse_almanac(input).unwrap();
+    let almanac = parse_almanac(input)?;
     let locations: Vec<i64> = almanac
         .seeds
         .iter()
@@ -196,7 +196,7 @@ pub fn part1(input: &str) -> anyhow::Result<i64> {
 }
 
 pub fn part2(input: &str) -> anyhow::Result<i64> {
-    let almanac = parse_almanac(input).unwrap();
+    let almanac = parse_almanac(input)?;
     let mut locations = Vec::new();
     for chunk in almanac.seeds.chunks(2) {
         let r = chunk[0]..chunk[0] + chunk[1];
