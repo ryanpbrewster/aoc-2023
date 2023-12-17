@@ -75,7 +75,7 @@ pub struct Dimensions {
     pub width: i32,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct Position(pub i32, pub i32);
 impl Position {
     pub fn step(self, dir: Direction) -> Self {
@@ -95,6 +95,24 @@ pub enum Direction {
     Down,
     Left,
     Right,
+}
+impl Direction {
+    pub fn clockwise(self) -> Direction {
+        match self {
+            Direction::Up => Direction::Right,
+            Direction::Down => Direction::Left,
+            Direction::Left => Direction::Up,
+            Direction::Right => Direction::Down,
+        }
+    }
+    pub fn counter_clockwise(self) -> Direction {
+        match self {
+            Direction::Up => Direction::Left,
+            Direction::Down => Direction::Right,
+            Direction::Left => Direction::Down,
+            Direction::Right => Direction::Up,
+        }
+    }
 }
 
 impl<T> Index<(i32, i32)> for Grid<T> {

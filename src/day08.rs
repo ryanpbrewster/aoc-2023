@@ -116,7 +116,13 @@ pub fn part1(input: &str) -> anyhow::Result<usize> {
 
     let mut cur = "AAA";
     let upper_bound = input.directions.len() * input.graph.len();
-    for (i, &dir) in input.directions.iter().cycle().enumerate().take(upper_bound) {
+    for (i, &dir) in input
+        .directions
+        .iter()
+        .cycle()
+        .enumerate()
+        .take(upper_bound)
+    {
         if cur == "ZZZ" {
             return Ok(i);
         }
@@ -336,13 +342,16 @@ mod test {
 
     #[test]
     fn fuzz_artifact_1() {
-        assert!(part1("
+        assert!(part1(
+            "
             R     AAA     =
 
             (x, R)
             
             =       R 
             (x, R)           
-        ").is_err());
+        "
+        )
+        .is_err());
     }
 }
