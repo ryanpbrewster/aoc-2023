@@ -108,6 +108,7 @@ use nom::{
     sequence::delimited,
     IResult,
 };
+use std::hash::Hash;
 
 use crate::grid::{Direction, Grid, Position};
 
@@ -124,42 +125,44 @@ pub fn part2(input: &str) -> anyhow::Result<u32> {
 fn minimal_heat_loss_path(grid: &Grid<u32>, min_steps: usize, max_steps: usize) -> u32 {
     assert!(min_steps <= max_steps);
     let destination = Position(grid.height() - 1, grid.width() - 1);
-    let mut queue: PriorityQueue = PriorityQueue::default();
+    let mut queue: PriorityQueue<Location, u32> = PriorityQueue::default();
     queue.push(
+        0,
         Location {
             position: Position(0, 0),
             direction: Direction::Right,
-            min_gas: 0,
-            max_gas: max_steps,
+            gas: 0,
         },
+    );
+    queue.push(
         0,
+        Location {
+            position: Position(0, 0),
+            direction: Direction::Down,
+            gas: 0,
+        },
     );
 
     while let Some(cur) = queue.pop() {
-        let Entry {
-            heat_loss,
-            location:
-                Location {
-                    position,
-                    direction,
-                    min_gas,
-                    max_gas,
-                },
-        } = cur;
-        if max_gas > 0 {
+        let (heat_loss, location) = cur;
+        let Location {
+            position,
+            direction,
+            gas,
+        } = location;
+        if gas < max_steps {
             let dir = direction;
             let next = position.step(dir);
             let loc = Location {
                 position: next,
                 direction: dir,
-                min_gas: min_gas.saturating_sub(1),
-                max_gas: max_gas - 1,
+                gas: gas + 1,
             };
             if let Some(c) = grid.get(next.0, next.1) {
-                queue.push(loc, heat_loss + c);
+                queue.push(heat_loss + c, loc);
             }
         }
-        if min_gas > 0 {
+        if gas < min_steps {
             continue;
         }
         if position == destination {
@@ -171,11 +174,10 @@ fn minimal_heat_loss_path(grid: &Grid<u32>, min_steps: usize, max_steps: usize) 
             let loc = Location {
                 position: next,
                 direction: dir,
-                min_gas: min_steps - 1,
-                max_gas: max_steps - 1,
+                gas: 1,
             };
             if let Some(c) = grid.get(next.0, next.1) {
-                queue.push(loc, heat_loss + c);
+                queue.push(heat_loss + c, loc);
             }
         }
         {
@@ -184,33 +186,40 @@ fn minimal_heat_loss_path(grid: &Grid<u32>, min_steps: usize, max_steps: usize) 
             let loc = Location {
                 position: next,
                 direction: dir,
-                min_gas: min_steps - 1,
-                max_gas: max_steps - 1,
+                gas: 1,
             };
             if let Some(c) = grid.get(next.0, next.1) {
-                queue.push(loc, heat_loss + c);
+                queue.push(heat_loss + c, loc);
             }
         }
     }
     unreachable!("the grid must have a path through it")
 }
 
-#[derive(Default)]
-struct PriorityQueue {
-    queue: BinaryHeap<Reverse<Entry>>,
-    seen: HashSet<Location>,
+struct PriorityQueue<T, W: Ord> {
+    queue: BinaryHeap<Reverse<(W, T)>>,
+    seen: HashSet<T>,
 }
-impl PriorityQueue {
-    fn push(&mut self, location: Location, heat_loss: u32) {
-        if self.seen.insert(location) {
-            self.queue.push(Reverse(Entry {
-                heat_loss,
-                location,
-            }));
+impl<T, W> PriorityQueue<T, W>
+where
+    T: Hash + Ord + Copy,
+    W: Ord,
+{
+    fn push(&mut self, w: W, t: T) {
+        if self.seen.insert(t) {
+            self.queue.push(Reverse((w, t)));
         }
     }
-    fn pop(&mut self) -> Option<Entry> {
+    fn pop(&mut self) -> Option<(W, T)> {
         self.queue.pop().map(|Reverse(cur)| cur)
+    }
+}
+impl<T: Ord, W: Ord> Default for PriorityQueue<T, W> {
+    fn default() -> Self {
+        Self {
+            queue: Default::default(),
+            seen: Default::default(),
+        }
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)] // important that `heat_loss` comes first so that `Ord` weights it most
@@ -222,8 +231,7 @@ struct Entry {
 struct Location {
     position: Position,
     direction: Direction,
-    min_gas: usize, // how many steps must we take in this direction before we can turn
-    max_gas: usize, // how many steps can we take in this direction before we must turn
+    gas: usize, // how many steps have we taken in this direction?
 }
 
 fn parse_input(input: &str) -> anyhow::Result<Grid<u32>> {
@@ -324,7 +332,7 @@ mod test {
         );
         assert_eq!(
             part2(&std::fs::read_to_string("data/day17.input").unwrap()).unwrap(),
-            927,
+            930,
         );
     }
 }
