@@ -95,11 +95,7 @@ This route causes the ultra crucible to incur the minimum possible heat loss of 
 Directing the ultra crucible from the lava pool to the machine parts factory, what is the least heat loss it can incur?
 */
 
-use std::{
-    cmp::Reverse,
-    collections::{BinaryHeap, HashSet},
-};
-
+use crate::grid::{Dimensions, Direction, Grid, Position};
 use anyhow::anyhow;
 use nom::{
     character::complete::{newline, one_of, space0},
@@ -110,22 +106,20 @@ use nom::{
 };
 use std::hash::Hash;
 
-use crate::grid::{Direction, Grid, Position};
-
-pub fn part1(input: &str) -> anyhow::Result<u32> {
+pub fn part1(input: &str) -> anyhow::Result<usize> {
     let grid = parse_input(input)?;
     Ok(minimal_heat_loss_path(&grid, 1, 3))
 }
 
-pub fn part2(input: &str) -> anyhow::Result<u32> {
+pub fn part2(input: &str) -> anyhow::Result<usize> {
     let grid = parse_input(input)?;
     Ok(minimal_heat_loss_path(&grid, 4, 10))
 }
 
-fn minimal_heat_loss_path(grid: &Grid<u32>, min_steps: usize, max_steps: usize) -> u32 {
+fn minimal_heat_loss_path(grid: &Grid<usize>, min_steps: usize, max_steps: usize) -> usize {
     assert!(min_steps <= max_steps);
     let destination = Position(grid.height() - 1, grid.width() - 1);
-    let mut queue: PriorityQueue<Location, u32> = PriorityQueue::default();
+    let mut queue: PriorityQueue = PriorityQueue::new(grid.size(), max_steps);
     queue.push(
         0,
         Location {
@@ -150,17 +144,23 @@ fn minimal_heat_loss_path(grid: &Grid<u32>, min_steps: usize, max_steps: usize) 
             direction,
             gas,
         } = location;
-        if gas < max_steps {
-            let dir = direction;
-            let next = position.step(dir);
-            let loc = Location {
-                position: next,
-                direction: dir,
-                gas: gas + 1,
-            };
+        let mut step = |new_direction: Direction| {
+            let next = position.step(new_direction);
             if let Some(c) = grid.get(next.0, next.1) {
+                let loc = Location {
+                    position: next,
+                    direction: new_direction,
+                    gas: if new_direction == direction {
+                        gas + 1
+                    } else {
+                        1
+                    },
+                };
                 queue.push(heat_loss + c, loc);
             }
+        };
+        if gas < max_steps {
+            step(direction);
         }
         if gas < min_steps {
             continue;
@@ -168,63 +168,35 @@ fn minimal_heat_loss_path(grid: &Grid<u32>, min_steps: usize, max_steps: usize) 
         if position == destination {
             return heat_loss;
         }
-        {
-            let dir = direction.clockwise();
-            let next = position.step(dir);
-            let loc = Location {
-                position: next,
-                direction: dir,
-                gas: 1,
-            };
-            if let Some(c) = grid.get(next.0, next.1) {
-                queue.push(heat_loss + c, loc);
-            }
-        }
-        {
-            let dir = direction.counter_clockwise();
-            let next = position.step(dir);
-            let loc = Location {
-                position: next,
-                direction: dir,
-                gas: 1,
-            };
-            if let Some(c) = grid.get(next.0, next.1) {
-                queue.push(heat_loss + c, loc);
-            }
-        }
+        step(direction.clockwise());
+        step(direction.counter_clockwise());
     }
     unreachable!("the grid must have a path through it")
 }
 
-struct PriorityQueue<T, W: Ord> {
-    queue: BinaryHeap<Reverse<(W, T)>>,
-    seen: HashSet<T>,
+struct PriorityQueue {
+    queue: VecHeap<Location>,
+    seen: LocationSet,
 }
-impl<T, W> PriorityQueue<T, W>
-where
-    T: Hash + Ord + Copy,
-    W: Ord,
-{
-    fn push(&mut self, w: W, t: T) {
-        if self.seen.insert(t) {
-            self.queue.push(Reverse((w, t)));
-        }
-    }
-    fn pop(&mut self) -> Option<(W, T)> {
-        self.queue.pop().map(|Reverse(cur)| cur)
-    }
-}
-impl<T: Ord, W: Ord> Default for PriorityQueue<T, W> {
-    fn default() -> Self {
+impl PriorityQueue {
+    fn new(dimensions: Dimensions, max_steps: usize) -> Self {
         Self {
-            queue: Default::default(),
-            seen: Default::default(),
+            queue: VecHeap::default(),
+            seen: LocationSet::new(dimensions, max_steps + 1),
         }
+    }
+    fn push(&mut self, w: usize, t: Location) {
+        if self.seen.insert(t) {
+            self.queue.push(t, w);
+        }
+    }
+    fn pop(&mut self) -> Option<(usize, Location)> {
+        self.queue.pop()
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)] // important that `heat_loss` comes first so that `Ord` weights it most
 struct Entry {
-    heat_loss: u32, // how much heat have we lost so far?
+    heat_loss: usize, // how much heat have we lost so far?
     location: Location,
 }
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -233,20 +205,84 @@ struct Location {
     direction: Direction,
     gas: usize, // how many steps have we taken in this direction?
 }
+struct LocationSet {
+    dimensions: Dimensions,
+    max_steps: usize,
+    bits: Vec<bool>,
+}
+impl LocationSet {
+    fn new(dimensions: Dimensions, max_steps: usize) -> Self {
+        Self {
+            dimensions,
+            max_steps,
+            bits: vec![false; (dimensions.height * dimensions.width) as usize * max_steps * 4],
+        }
+    }
+    fn insert(
+        &mut self,
+        Location {
+            position,
+            direction,
+            gas,
+        }: Location,
+    ) -> bool {
+        let idx: usize =
+            ((position.0 * self.dimensions.width + position.1) as usize * self.max_steps + gas) * 4
+                + usize::from(direction);
+        let Some(cur) = self.bits.get_mut(idx) else {
+            panic!("invalid location: {position:?}/{direction:?}/{gas}");
+        };
+        let prev = *cur;
+        *cur = true;
+        !prev
+    }
+}
 
-fn parse_input(input: &str) -> anyhow::Result<Grid<u32>> {
+struct VecHeap<T> {
+    items: Vec<Vec<T>>,
+    min_weight: usize,
+}
+impl<T> VecHeap<T> {
+    fn push(&mut self, item: T, weight: usize) {
+        while weight >= self.items.len() {
+            self.items.push(Vec::new());
+        }
+        self.items[weight].push(item)
+    }
+    fn pop(&mut self) -> Option<(usize, T)> {
+        for w in self.min_weight..self.items.len() {
+            if let Some(item) = self.items[w].pop() {
+                return Some((w, item));
+            } else {
+                self.min_weight = w + 1;
+            }
+        }
+        None
+    }
+}
+impl<T> Default for VecHeap<T> {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            min_weight: 0,
+        }
+    }
+}
+
+fn parse_input(input: &str) -> anyhow::Result<Grid<usize>> {
     let input = input.trim();
     let (_, grid) = grid_parser(input).map_err(|err| anyhow!("could not parse {input}: {err}"))?;
     Ok(grid)
 }
-fn grid_parser(input: &str) -> IResult<&str, Grid<u32>> {
+fn grid_parser(input: &str) -> IResult<&str, Grid<usize>> {
     map_res(separated_list1(newline, row_parser), Grid::new)(input)
 }
-fn row_parser(input: &str) -> IResult<&str, Vec<u32>> {
+fn row_parser(input: &str) -> IResult<&str, Vec<usize>> {
     let (input, cells) = delimited(
         space0,
         many1(map_res(one_of("123456789"), |ch| {
             ch.to_digit(10)
+                .map(|d| d as usize)
                 .ok_or_else(|| anyhow!("could not parse decimal number from {ch}"))
         })),
         space0,

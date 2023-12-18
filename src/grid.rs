@@ -69,7 +69,7 @@ impl<T> Grid<T> {
             .map(|(i, j)| ((i, j), &self.rows[i as usize][j as usize]))
     }
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Dimensions {
     pub height: i32,
     pub width: i32,
@@ -111,6 +111,16 @@ impl Direction {
             Direction::Down => Direction::Right,
             Direction::Left => Direction::Down,
             Direction::Right => Direction::Up,
+        }
+    }
+}
+impl From<Direction> for usize {
+    fn from(value: Direction) -> Self {
+        match value {
+            Direction::Up => 0,
+            Direction::Down => 1,
+            Direction::Left => 2,
+            Direction::Right => 3,
         }
     }
 }
