@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Write};
+use std::fmt::Write;
 
 use crate::grid::Grid;
 use anyhow::{anyhow, bail};
@@ -244,8 +244,8 @@ pub fn part1(input: &str) -> anyhow::Result<usize> {
     Err(anyhow!("no closed loop"))
 }
 
-pub fn part2(input: &str) -> anyhow::Result<usize> {
-    let mut grid = parse_input(input)?;
+pub fn part2(input: &str) -> anyhow::Result<i32> {
+    let grid = parse_input(input)?;
     let Some((i, j)) = itertools::iproduct!(0..grid.height(), 0..grid.width())
         .find(|&(i, j)| grid.get(i, j) == Some(&Tile::Animal))
     else {
@@ -258,74 +258,30 @@ pub fn part2(input: &str) -> anyhow::Result<usize> {
         bail!("no closed loop")
     };
 
-    let (up, down, left, right) = {
-        let (i0, j0) = path[1];
-        let (i1, j1) = path.last().copied().unwrap();
-        (
-            i0 == i - 1 || i1 == i - 1,
-            i0 == i + 1 || i1 == i + 1,
-            j0 == j - 1 || j1 == j - 1,
-            j0 == j + 1 || j1 == j + 1,
-        )
-    };
-    *grid.get_mut(i, j).unwrap() = Tile::Connector(match (up, down, left, right) {
-        (true, true, false, false) => Pipe::UD,
-        (true, false, true, false) => Pipe::UL,
-        (true, false, false, true) => Pipe::UR,
-        (false, true, true, false) => Pipe::DL,
-        (false, false, true, true) => Pipe::LR,
-        (false, true, false, true) => Pipe::DR,
-        _ => panic!("invalid path: (up={up},down={down},left={left},right={right})"),
-    });
-    let path: HashMap<(i32, i32), Pipe> = path
-        .into_iter()
-        .map(|(i, j)| {
-            let &Tile::Connector(pipe) = grid.get(i, j).unwrap() else {
-                panic!("invalid path")
-            };
-            ((i, j), pipe)
-        })
-        .collect();
-
+    // Consider the entire path to be a large polygon. Use the "surveyor's formula" to compute its area:
+    //   A = 1/2 * Sum[ (y[i] + y[i+1]) * (x[i] - x[i+1]) ] over all edges.
+    // In our case that will give us a bit too much area.
+    // Consider the simple input:
+    //   F7
+    //   LJ
+    // which has no internal squares at all. We're modeling this as a polygon with points at
+    //   {(0, 0), (1, 0), (1, 1), (0, 1) }
+    // which has an area of 1.
+    // If we want to know how many interior points it has, we can subtract off the area within a small region
+    // of the perimeter. I imagine there's some clever way to show that this always comes up to be a bit too
+    // large, but empirically (Area - Perimeter + 1) matches the flood-fill algorithm.
     let mut area = 0;
-    for i in 0..grid.height() {
-        // Are are inside the loop?
-        let mut inside = false;
-        // If we are riding an edge, was the latest pipe "upwards" facing?
-        // This is relevant because when we hop off the edge we need to tell if
-        // we ever actually crossed it.
-        let mut upward = false;
-        for j in 0..grid.width() {
-            match path.get(&(i, j)) {
-                None => {
-                    if inside {
-                        area += 1;
-                    }
-                }
-                Some(Pipe::UD) => {
-                    inside = !inside;
-                }
-                Some(Pipe::UR) => {
-                    upward = true;
-                }
-                Some(Pipe::DR) => {
-                    upward = false;
-                }
-                Some(Pipe::LR) => {}
-                Some(Pipe::UL) => {
-                    if !upward {
-                        inside = !inside;
-                    }
-                }
-                Some(Pipe::DL) => {
-                    if upward {
-                        inside = !inside;
-                    }
-                }
-            }
-        }
+    let mut perimeter = 0;
+    let mut prev = path.last().copied().unwrap();
+    for cur in path {
+        let (x0, y0) = prev;
+        let (x1, y1) = cur;
+        area += (y0 + y1) * (x1 - x0);
+        perimeter += 1;
+        prev = cur;
     }
-    Ok(area)
+    dbg!(area, perimeter);
+    Ok(area.abs() / 2 - perimeter / 2 + 1)
 }
 
 fn extract_loop(
