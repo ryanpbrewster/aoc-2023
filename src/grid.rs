@@ -79,12 +79,15 @@ pub struct Dimensions {
 pub struct Position(pub i32, pub i32);
 impl Position {
     pub fn step(self, dir: Direction) -> Self {
+        self.stepn(dir, 1)
+    }
+    pub fn stepn(self, dir: Direction, n: i32) -> Self {
         let Position(i, j) = self;
         match dir {
-            Direction::Up => Position(i - 1, j),
-            Direction::Down => Position(i + 1, j),
-            Direction::Left => Position(i, j - 1),
-            Direction::Right => Position(i, j + 1),
+            Direction::Up => Position(i - n, j),
+            Direction::Down => Position(i + n, j),
+            Direction::Left => Position(i, j - n),
+            Direction::Right => Position(i, j + n),
         }
     }
 }
