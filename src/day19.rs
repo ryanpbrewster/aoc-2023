@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail};
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::RangeInclusive};
 
 use nom::{
     branch::alt,
@@ -107,6 +107,35 @@ pub fn part1(input: &str) -> anyhow::Result<u32> {
     Ok(total)
 }
 
+pub fn part2(input: &str) -> anyhow::Result<u64> {
+    let input = parse_input(input)?;
+    let wfs: HashMap<String, Workflow> = input
+        .workflows
+        .into_iter()
+        .map(|w| (w.name.clone(), w))
+        .collect();
+    let full: HashMap<Key, RangeInclusive<u32>> = [Key::X, Key::M, Key::A, Key::S]
+        .into_iter()
+        .map(|k| (k, 1..=4000))
+        .collect();
+
+    let mut stack = vec![("in".to_owned(), Items { kvs: full })];
+    let mut total = 0;
+    while let Some((label, items)) = stack.pop() {
+        let w = wfs
+            .get(&label)
+            .ok_or_else(|| anyhow!("no workflow with label {label}"))?;
+        for (destination, child) in w.destinations(items) {
+            match destination {
+                Destination::Accept => total += child.count(),
+                Destination::Reject => {}
+                Destination::Workflow(next) => stack.push((next, child)),
+            }
+        }
+    }
+    Ok(total)
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct Input {
     workflows: Vec<Workflow>,
@@ -116,6 +145,19 @@ struct Input {
 struct Item {
     kvs: HashMap<Key, u32>,
 }
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct Items {
+    kvs: HashMap<Key, RangeInclusive<u32>>,
+}
+impl Items {
+    fn count(&self) -> u64 {
+        self.kvs
+            .values()
+            .map(|vs| (vs.end() - vs.start() + 1) as u64)
+            .product()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum Key {
     X,
@@ -148,6 +190,43 @@ impl Workflow {
             }
         }
         self.fallback.clone()
+    }
+
+    fn destinations(&self, items: Items) -> Vec<(Destination, Items)> {
+        let mut leftovers = items;
+        let mut results = Vec::new();
+        for Transition {
+            condition,
+            destination,
+        } in &self.transitions
+        {
+            let vs = leftovers.kvs.get(&condition.key).cloned().unwrap();
+            if !vs.contains(&condition.value) {
+                continue;
+            }
+            let mut child = leftovers.clone();
+            match condition.op {
+                BinaryOp::LT => {
+                    child
+                        .kvs
+                        .insert(condition.key, *vs.start()..=condition.value - 1);
+                    leftovers
+                        .kvs
+                        .insert(condition.key, condition.value..=*vs.end());
+                }
+                BinaryOp::GT => {
+                    leftovers
+                        .kvs
+                        .insert(condition.key, *vs.start()..=condition.value);
+                    child
+                        .kvs
+                        .insert(condition.key, condition.value + 1..=*vs.end());
+                }
+            };
+            results.push((destination.clone(), child));
+        }
+        results.push((self.fallback.clone(), leftovers));
+        results
     }
 }
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -188,7 +267,6 @@ fn workflows_parser(input: &str) -> IResult<&str, Vec<Workflow>> {
     separated_list1(delimited(space0, newline, space0), workflow_parser)(input)
 }
 fn workflow_parser(input: &str) -> IResult<&str, Workflow> {
-    // gd{a>3333:R,R}
     let (input, name) = alpha1(input)?;
     let (input, (transitions, fallback)) = delimited(
         tag("{"),
@@ -296,6 +374,18 @@ mod test {
         assert_eq!(
             part1(&std::fs::read_to_string("data/day19.input").unwrap()).unwrap(),
             446517,
+        );
+    }
+
+    #[test]
+    fn part2_sample_input() {
+        assert_eq!(part2(SAMPLE_INPUT).unwrap(), 167409079868000);
+    }
+    #[test]
+    fn part2_real_input() {
+        assert_eq!(
+            part2(&std::fs::read_to_string("data/day19.input").unwrap()).unwrap(),
+            130090458884662,
         );
     }
 }
