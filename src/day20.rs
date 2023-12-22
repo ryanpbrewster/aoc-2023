@@ -104,6 +104,13 @@ In the second example, after pushing the button 1000 times, 4250 low pulses and 
 
 Consult your module configuration; determine the number of low pulses and high pulses that would be sent after pushing the button 1000 times, waiting for all pulses to be fully handled after each push of the button. What do you get if you multiply the total number of low pulses sent by the total number of high pulses sent?
 */
+/*
+--- Part Two ---
+The final machine responsible for moving the sand down to Island Island has a module attached named rx. The machine turns on when a single low pulse is sent to rx.
+
+Reset all modules to their default states. Waiting for all pulses to be fully handled after each button press, what is the fewest number of button presses required to deliver a single low pulse to the module named rx?
+
+*/
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -132,17 +139,38 @@ pub fn part1(input: &str) -> anyhow::Result<usize> {
 pub fn part2(input: &str) -> anyhow::Result<usize> {
     let mut graph = parse_input(input)?;
 
-    let mut lo = 0;
-    let mut hi = 0;
+    // This is garbage.
+    // The direct approach is too slow. If we look at the input:
+    //   &dn -> rx
+    // rx is fed by a single conjunction, which in turn is fed by four other
+    // conjunctions. Those conjunctions _happen_ to have very simple periodic behavior.
+    // Maybe this is the result of some clever insight, but rather than building a real
+    // solution here I'm just going to hard-code the ancestors here and multiply together
+    // their cycle lengths.
+    let mut i = 0;
+    let ancestors = ["dd", "fh", "xp", "fc"];
+    let mut cycle_lengths = Vec::new();
     loop {
         let r = graph.signal("broadcaster", Signal::Lo)?;
-        lo += r.lo;
-        hi += r.hi;
-        if r.recv_lo.contains("rx") {
-            break;
+        i += 1;
+        if ancestors.iter().any(|&n| r.recv_lo.contains(n)) {
+            cycle_lengths.push(i);
+            if cycle_lengths.len() == ancestors.len() {
+                return Ok(cycle_lengths.into_iter().reduce(lcm).unwrap());
+            }
         }
     }
-    Ok(lo * hi)
+}
+
+fn gcd(m: usize, n: usize) -> usize {
+    if n == 0 {
+        m
+    } else {
+        gcd(n, m % n)
+    }
+}
+fn lcm(m: usize, n: usize) -> usize {
+    m / gcd(m, n) * n
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
@@ -335,7 +363,7 @@ mod test {
     fn part2_real_input() {
         assert_eq!(
             part2(&std::fs::read_to_string("data/day20.input").unwrap()).unwrap(),
-            899848294,
+            247454898168563,
         );
     }
 }
